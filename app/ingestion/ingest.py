@@ -285,10 +285,14 @@ def _create_box_score_object(box_score_data: Dict, game_id: int, player_map: Dic
     if not isinstance(box_score_data, dict):
         return None
     
-    player_name = box_score_data.get("playerName") or box_score_data.get("name")
+    # Fast lookup - try playerName first (most common)
+    player_name = box_score_data.get("playerName")
+    if not player_name:
+        player_name = box_score_data.get("name")
     if not player_name:
         return None
     
+    # Fast dictionary lookup
     player_id = player_map.get(player_name)
     if not player_id:
         return None
@@ -341,16 +345,19 @@ def _create_box_score_object(box_score_data: Dict, game_id: int, player_map: Dic
     )
 
 
-def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, inserted_pairs: set):
+def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, inserted_pairs: set) -> int:
     """Optimized batch insert with minimal duplicate checking.
     
     Args:
         box_scores: List of BoxScore objects to insert
         db: Database session
         inserted_pairs: Set of (game_id, player_id) pairs already inserted (updated in place)
+    
+    Returns:
+        Number of box scores actually inserted
     """
     if not box_scores:
-        return
+        return 0
     
     # Filter out pairs we've already inserted in this session
     new_box_scores = [
@@ -359,28 +366,31 @@ def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, 
     ]
     
     if not new_box_scores:
-        return
+        return 0
     
-    # For remaining, check only the exact pairs we're inserting (most efficient)
-    from sqlalchemy import text, or_
-    
+    # Skip database duplicate check if we have many pairs (assume they're new)
+    # Only check DB if we have a small batch (likely duplicates from retry)
     pairs_to_check = {(bs.game_id, bs.player_id) for bs in new_box_scores}
     
-    # Use OR conditions to check exact (game_id, player_id) pairs
-    # This is faster than IN queries as it uses the composite index
-    conditions = [
-        and_(BoxScore.game_id == gid, BoxScore.player_id == pid)
-        for gid, pid in pairs_to_check
-    ]
-    
-    if conditions:
-        # Query only the exact pairs we're checking (uses composite index)
-        existing = db.query(BoxScore.game_id, BoxScore.player_id).filter(
-            or_(*conditions)
-        ).all()
-        existing_pairs = {(e[0], e[1]) for e in existing}
-    else:
+    if len(pairs_to_check) > 100:
+        # Large batch - assume most are new, skip expensive DB query
+        # The in-memory tracking should catch most duplicates
         existing_pairs = set()
+    else:
+        # Small batch - do quick DB check (might be retrying duplicates)
+        from sqlalchemy import text, or_, and_
+        conditions = [
+            and_(BoxScore.game_id == gid, BoxScore.player_id == pid)
+            for gid, pid in pairs_to_check
+        ]
+        
+        if conditions:
+            existing = db.query(BoxScore.game_id, BoxScore.player_id).filter(
+                or_(*conditions)
+            ).all()
+            existing_pairs = {(e[0], e[1]) for e in existing}
+        else:
+            existing_pairs = set()
     
     # Filter out database duplicates
     final_box_scores = [
@@ -388,15 +398,20 @@ def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, 
         if (bs.game_id, bs.player_id) not in existing_pairs
     ]
     
+    if not final_box_scores:
+        return 0
+    
     # Update inserted_pairs with what we're about to insert
     for bs in final_box_scores:
         inserted_pairs.add((bs.game_id, bs.player_id))
     
+    inserted_count = 0
     if final_box_scores:
         try:
             # Use bulk_save_objects for speed
             db.bulk_save_objects(final_box_scores, update_changed_only=False)
             db.commit()
+            inserted_count = len(final_box_scores)
         except Exception as e:
             # If bulk fails (e.g., duplicate constraint), try individual with ignore
             db.rollback()
@@ -407,10 +422,15 @@ def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, 
                     db.add(bs)
                     db.commit()
                     inserted_pairs.add((bs.game_id, bs.player_id))
+                    inserted_count += 1
                 except Exception:
                     # Duplicate or other error - skip this one
                     db.rollback()
+                    # Remove from inserted_pairs if it failed
+                    inserted_pairs.discard((bs.game_id, bs.player_id))
                     continue
+    
+    return inserted_count
 
 
 def _batch_insert_box_scores(box_scores: List[BoxScore], db: Session):
@@ -490,11 +510,17 @@ def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, u
             batch = []
             inserted_pairs = set()  # Track what we've inserted in this session
             
+            import time as time_module
             for idx, (nba_game_id, db_game_id) in enumerate(game_id_map.items(), 1):
                 if idx % 10 == 0:
                     print(f"   Progress: {idx}/{total_games} games processed ({box_score_count} box scores so far)...")
                 
+                # Time the API call to see if that's the bottleneck
+                api_start = time_module.time()
                 box_scores_data = client.get_box_score(nba_game_id)
+                api_time = time_module.time() - api_start
+                
+                # Note: Slow API warnings are now handled inside get_box_score() with retry logic
                 for box_score_data in box_scores_data:
                     box_score_obj = _create_box_score_object(box_score_data, db_game_id, player_map, db)
                     if box_score_obj:
@@ -506,18 +532,33 @@ def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, u
                             
                             # Batch commit for performance
                             if len(batch) >= batch_size:
-                                _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
-                                box_score_count += len(batch)
+                                db_start = time_module.time()
+                                inserted = _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
+                                db_time = time_module.time() - db_start
+                                box_score_count += inserted  # Count only actually inserted
+                                
+                                # Warn if DB operation is slow
+                                if db_time > 1.0 and idx % 50 == 0:
+                                    print(f"   ⚠️  Slow DB operation: {db_time:.2f}s for batch at game {idx}")
+                                
                                 batch = []
                 
-                # Periodically clear inserted_pairs to free memory (every 500 games)
-                if idx % 500 == 0:
-                    inserted_pairs.clear()  # Will re-check database for next batch
+                # Periodically clear inserted_pairs to free memory and reduce lookup time
+                # Clear more frequently to keep set size manageable
+                if idx % 200 == 0:
+                    # Before clearing, commit any pending batch
+                    if batch:
+                        inserted = _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
+                        box_score_count += inserted  # Count only actually inserted
+                        batch = []
+                    # Clear to reduce memory and lookup overhead
+                    inserted_pairs.clear()
+                    print(f"   Cleared memory cache at game {idx}")
             
             # Commit remaining box scores
             if batch:
-                _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
-                box_score_count += len(batch)
+                inserted = _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
+                box_score_count += inserted  # Count only actually inserted
             
             print(f"✅ Ingested {box_score_count} box score entries")
         else:

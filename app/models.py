@@ -1,5 +1,5 @@
 """SQLAlchemy models for NBA data."""
-from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db import Base
@@ -66,9 +66,11 @@ class BoxScore(Base):
     game_id = Column(Integer, ForeignKey("games.id"), nullable=False, index=True)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False, index=True)
     
-    # Note: Composite index on (game_id, player_id) would help duplicate checks
-    # SQLAlchemy doesn't directly support composite indexes in Column definition
-    # We'll create it manually in init_db if needed
+    # Unique constraint ensures one box score per player per game
+    # Also creates a composite index for fast duplicate checks
+    __table_args__ = (
+        UniqueConstraint('game_id', 'player_id', name='_game_player_uc'),
+    )
     
     # Basic stats
     minutes = Column(Float, nullable=True)  # Minutes played

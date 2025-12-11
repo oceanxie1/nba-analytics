@@ -25,13 +25,29 @@ class NBAAPIClient:
         self.rate_limit_delay = rate_limit_delay
         self.last_request_time = 0
         self._team_id_to_abbr = {}  # Cache for team ID to abbreviation mapping
+        self._request_count = 0  # Track number of requests
+        self._slow_request_count = 0  # Track slow requests
     
     def _rate_limit(self):
-        """Enforce rate limiting."""
+        """Enforce rate limiting with adaptive delay."""
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
-        if time_since_last < self.rate_limit_delay:
-            time.sleep(self.rate_limit_delay - time_since_last)
+        
+        # Increase delay after many requests or slow requests (API might throttle)
+        self._request_count += 1
+        adaptive_delay = self.rate_limit_delay
+        
+        # Aggressively increase delay if we've had slow requests
+        if self._slow_request_count > 5:
+            adaptive_delay = self.rate_limit_delay * 2.0  # Double the delay
+        elif self._slow_request_count > 2:
+            adaptive_delay = self.rate_limit_delay * 1.5
+        elif self._request_count > 300:
+            # After 300 requests, add small extra delay to avoid throttling
+            adaptive_delay = self.rate_limit_delay * 1.2
+        
+        if time_since_last < adaptive_delay:
+            time.sleep(adaptive_delay - time_since_last)
         self.last_request_time = time.time()
     
     def get_teams(self, season: Optional[str] = None) -> List[Dict]:
@@ -333,57 +349,97 @@ class NBAAPIClient:
         print(f"   ✅ Found {len(all_games)} total games for season {season}")
         return all_games
     
-    def get_box_score(self, game_id: str) -> List[Dict]:
-        """Fetch box score for a specific game.
+    def get_box_score(self, game_id: str, max_retries: int = 3, timeout: int = 10) -> List[Dict]:
+        """Fetch box score for a specific game with retry logic.
         
         Args:
             game_id: NBA game ID
+            max_retries: Maximum number of retry attempts
+            timeout: Timeout in seconds (not directly used by nba_api, but tracked)
         
         Returns:
-            List of box score dictionaries
+            List of box score dictionaries (empty list on failure)
         """
-        self._rate_limit()
+        import time as time_module
         
-        try:
-            box_score = BoxScoreTraditionalV2(game_id=game_id)
-            df = box_score.get_data_frames()[0]  # Player stats
+        for attempt in range(max_retries):
+            self._rate_limit()
             
-            if df.empty:
-                return []
-            
-            box_scores_data = []
-            for _, row in df.iterrows():
-                # Skip players with no stats (DNP, etc.)
-                min_value = row.get("MIN")
-                if pd.isna(min_value) or min_value == "" or min_value is None:
-                    continue
+            try:
+                start_time = time_module.time()
+                box_score = BoxScoreTraditionalV2(game_id=game_id)
+                df = box_score.get_data_frames()[0]  # Player stats
+                elapsed = time_module.time() - start_time
                 
-                # Clean up minutes value - handle edge cases
-                minutes_str = str(min_value).strip()
-                if not minutes_str or minutes_str == "nan":
-                    continue
+                # Track slow requests
+                if elapsed > 5.0:
+                    self._slow_request_count += 1
+                    if attempt == 0:  # Only log on first attempt
+                        print(f"   ⚠️  Slow box score API call: {elapsed:.1f}s for game {game_id}")
+                else:
+                    # Reset slow count if we get a fast request
+                    if self._slow_request_count > 0:
+                        self._slow_request_count = max(0, self._slow_request_count - 1)
+                
+                if df.empty:
+                    return []
+                
+                # Use itertuples() instead of iterrows() - MUCH faster (10-100x)
+                # itertuples() is significantly faster because it returns named tuples
+                box_scores_data = []
+                for row in df.itertuples(index=False):
+                    # Skip players with no stats (DNP, etc.)
+                    min_value = getattr(row, 'MIN', None)
+                    if min_value is None or min_value == "" or (isinstance(min_value, float) and pd.isna(min_value)):
+                        continue
                     
-                box_scores_data.append({
-                    "playerName": row.get("PLAYER_NAME", ""),
-                    "minutes": minutes_str,
-                    "points": int(row.get("PTS", 0)) if pd.notna(row.get("PTS")) else 0,
-                    "rebounds": int(row.get("REB", 0)) if pd.notna(row.get("REB")) else 0,
-                    "assists": int(row.get("AST", 0)) if pd.notna(row.get("AST")) else 0,
-                    "steals": int(row.get("STL", 0)) if pd.notna(row.get("STL")) else 0,
-                    "blocks": int(row.get("BLK", 0)) if pd.notna(row.get("BLK")) else 0,
-                    "turnovers": int(row.get("TOV", 0)) if pd.notna(row.get("TOV")) else 0,
-                    "personalFouls": int(row.get("PF", 0)) if pd.notna(row.get("PF")) else 0,
-                    "fieldGoalsMade": int(row.get("FGM", 0)) if pd.notna(row.get("FGM")) else 0,
-                    "fieldGoalsAttempted": int(row.get("FGA", 0)) if pd.notna(row.get("FGA")) else 0,
-                    "threePointersMade": int(row.get("FG3M", 0)) if pd.notna(row.get("FG3M")) else 0,
-                    "threePointersAttempted": int(row.get("FG3A", 0)) if pd.notna(row.get("FG3A")) else 0,
-                    "freeThrowsMade": int(row.get("FTM", 0)) if pd.notna(row.get("FTM")) else 0,
-                    "freeThrowsAttempted": int(row.get("FTA", 0)) if pd.notna(row.get("FTA")) else 0,
-                    "plusMinus": int(row.get("PLUS_MINUS", 0)) if pd.notna(row.get("PLUS_MINUS")) else 0
-                })
-            
-            return box_scores_data
-        except Exception as e:
-            # Silently skip errors (game might not have box score data yet)
-            return []
+                    # Clean up minutes value - handle edge cases
+                    minutes_str = str(min_value).strip()
+                    if not minutes_str or minutes_str == "nan":
+                        continue
+                    
+                    # Use getattr for faster access (itertuples uses named tuples)
+                    # Handle NaN values properly
+                    def safe_int(val, default=0):
+                        if val is None or (isinstance(val, float) and pd.isna(val)):
+                            return default
+                        try:
+                            return int(val)
+                        except (ValueError, TypeError):
+                            return default
+                    
+                    box_scores_data.append({
+                        "playerName": getattr(row, 'PLAYER_NAME', ''),
+                        "minutes": minutes_str,
+                        "points": safe_int(getattr(row, 'PTS', None), 0),
+                        "rebounds": safe_int(getattr(row, 'REB', None), 0),
+                        "assists": safe_int(getattr(row, 'AST', None), 0),
+                        "steals": safe_int(getattr(row, 'STL', None), 0),
+                        "blocks": safe_int(getattr(row, 'BLK', None), 0),
+                        "turnovers": safe_int(getattr(row, 'TOV', None), 0),
+                        "personalFouls": safe_int(getattr(row, 'PF', None), 0),
+                        "fieldGoalsMade": safe_int(getattr(row, 'FGM', None), 0),
+                        "fieldGoalsAttempted": safe_int(getattr(row, 'FGA', None), 0),
+                        "threePointersMade": safe_int(getattr(row, 'FG3M', None), 0),
+                        "threePointersAttempted": safe_int(getattr(row, 'FG3A', None), 0),
+                        "freeThrowsMade": safe_int(getattr(row, 'FTM', None), 0),
+                        "freeThrowsAttempted": safe_int(getattr(row, 'FTA', None), 0),
+                        "plusMinus": safe_int(getattr(row, 'PLUS_MINUS', None), 0)
+                    })
+                
+                return box_scores_data
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Exponential backoff: wait 2^attempt seconds
+                    wait_time = 2 ** attempt
+                    print(f"   ⚠️  Error fetching box score for game {game_id} (attempt {attempt + 1}/{max_retries}): {e}")
+                    print(f"   Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    # Final attempt failed
+                    print(f"   ❌ Failed to fetch box score for game {game_id} after {max_retries} attempts: {e}")
+                    return []
+        
+        return []  # Should never reach here, but just in case
 
