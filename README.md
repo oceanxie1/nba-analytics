@@ -20,6 +20,9 @@ pip install -r requirements.txt
 # Database is auto-created on first run
 # Add sample data:
 python add_sample_data.py
+
+# Or ingest real NBA data (see Data Ingestion section):
+python ingest_nba_data.py
 ```
 
 4. Run the server:
@@ -38,6 +41,20 @@ uvicorn app.main:app --reload
 python test_api.py
 ```
 
+## Data Ingestion
+
+Ingest real NBA data into the database:
+
+```bash
+# Ingest from NBA API (current season)
+python ingest_nba_data.py
+
+# Ingest specific season
+python ingest_nba_data.py 2023-24
+```
+
+For CSV-based ingestion or manual data entry, see `app/ingestion/README.md`.
+
 ## Project Structure
 
 ```
@@ -47,6 +64,10 @@ app/
 ├── models.py        # SQLAlchemy models
 ├── schemas.py       # Pydantic schemas
 ├── routers/         # API endpoints
+├── ingestion/       # Data ingestion module
+│   ├── nba_client.py    # NBA API client
+│   ├── ingest.py        # Core ingestion functions
+│   └── csv_ingest.py    # CSV import utilities
 └── analytics/       # ML/feature engineering (future)
 ```
 
