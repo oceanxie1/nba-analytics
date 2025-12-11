@@ -66,6 +66,10 @@ class BoxScore(Base):
     game_id = Column(Integer, ForeignKey("games.id"), nullable=False, index=True)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False, index=True)
     
+    # Note: Composite index on (game_id, player_id) would help duplicate checks
+    # SQLAlchemy doesn't directly support composite indexes in Column definition
+    # We'll create it manually in init_db if needed
+    
     # Basic stats
     minutes = Column(Float, nullable=True)  # Minutes played
     points = Column(Integer, nullable=True, default=0)

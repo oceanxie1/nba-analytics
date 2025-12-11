@@ -31,6 +31,26 @@ def get_db():
 
 
 def init_db():
-    """Initialize database by creating all tables."""
+    """Initialize database by creating all tables and indexes."""
     Base.metadata.create_all(bind=engine)
+    
+    # Create composite index for faster duplicate checking in box_scores
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        try:
+            # Check if index already exists
+            if "sqlite" in DATABASE_URL:
+                result = conn.execute(text("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='index' AND name='idx_box_scores_game_player'
+                """))
+                if not result.fetchone():
+                    conn.execute(text("""
+                        CREATE INDEX idx_box_scores_game_player 
+                        ON box_scores(game_id, player_id)
+                    """))
+                    conn.commit()
+        except Exception:
+            # Index might already exist or database doesn't support it
+            pass
 

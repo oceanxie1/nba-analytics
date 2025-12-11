@@ -2,10 +2,12 @@
 from sqlalchemy.orm import Session
 from datetime import date, datetime
 from typing import List, Dict, Optional
+from sqlalchemy import and_
 from app.db import SessionLocal
 from app.models import Team, Player, Game, BoxScore
 from app.ingestion.nba_client import NBAClient
 from app.ingestion.nba_api_client import NBAAPIClient
+from datetime import datetime
 
 
 def ingest_teams(teams_data: List[Dict], db: Session) -> Dict[str, int]:
@@ -218,13 +220,33 @@ def ingest_box_score(box_score_data: Dict, game_id: int, player_map: Dict[str, i
     if existing:
         return existing.id
     
-    # Parse minutes (format: "MM:SS" or float)
+    # Parse minutes (format: "MM:SS", float, or other formats)
     minutes = box_score_data.get("minutes")
-    if isinstance(minutes, str) and ":" in minutes:
-        parts = minutes.split(":")
-        minutes = float(parts[0]) + float(parts[1]) / 60.0
-    elif minutes:
-        minutes = float(minutes)
+    if isinstance(minutes, str):
+        if ":" in minutes:
+            # Format: "MM:SS"
+            try:
+                parts = minutes.split(":")
+                if len(parts) == 2:
+                    minutes = float(parts[0]) + float(parts[1]) / 60.0
+                else:
+                    minutes = None
+            except (ValueError, IndexError):
+                minutes = None
+        elif minutes.replace(".", "").replace("-", "").isdigit():
+            # Try to parse as float if it's numeric
+            try:
+                minutes = float(minutes)
+            except ValueError:
+                minutes = None
+        else:
+            # Invalid format (like "0-57" or other non-standard)
+            minutes = None
+    elif minutes is not None:
+        try:
+            minutes = float(minutes)
+        except (ValueError, TypeError):
+            minutes = None
     else:
         minutes = None
     
@@ -251,6 +273,150 @@ def ingest_box_score(box_score_data: Dict, game_id: int, player_map: Dict[str, i
     db.commit()
     db.refresh(box_score)
     return box_score.id
+
+
+def _create_box_score_object(box_score_data: Dict, game_id: int, player_map: Dict[str, int],
+                            db: Session) -> Optional[BoxScore]:
+    """Create a BoxScore object without committing (for batch processing).
+    
+    Returns:
+        BoxScore object if valid, None otherwise
+    """
+    if not isinstance(box_score_data, dict):
+        return None
+    
+    player_name = box_score_data.get("playerName") or box_score_data.get("name")
+    if not player_name:
+        return None
+    
+    player_id = player_map.get(player_name)
+    if not player_id:
+        return None
+    
+    # Parse minutes
+    minutes = box_score_data.get("minutes")
+    if isinstance(minutes, str):
+        if ":" in minutes:
+            try:
+                parts = minutes.split(":")
+                if len(parts) == 2:
+                    minutes = float(parts[0]) + float(parts[1]) / 60.0
+                else:
+                    minutes = None
+            except (ValueError, IndexError):
+                minutes = None
+        elif minutes.replace(".", "").replace("-", "").isdigit():
+            try:
+                minutes = float(minutes)
+            except ValueError:
+                minutes = None
+        else:
+            minutes = None
+    elif minutes is not None:
+        try:
+            minutes = float(minutes)
+        except (ValueError, TypeError):
+            minutes = None
+    else:
+        minutes = None
+    
+    return BoxScore(
+        game_id=game_id,
+        player_id=player_id,
+        minutes=minutes,
+        points=box_score_data.get("points") or 0,
+        rebounds=box_score_data.get("rebounds") or 0,
+        assists=box_score_data.get("assists") or 0,
+        steals=box_score_data.get("steals") or 0,
+        blocks=box_score_data.get("blocks") or 0,
+        turnovers=box_score_data.get("turnovers") or 0,
+        personal_fouls=box_score_data.get("personalFouls") or box_score_data.get("fouls") or 0,
+        field_goals_made=box_score_data.get("fieldGoalsMade") or box_score_data.get("fgm") or 0,
+        field_goals_attempted=box_score_data.get("fieldGoalsAttempted") or box_score_data.get("fga") or 0,
+        three_pointers_made=box_score_data.get("threePointersMade") or box_score_data.get("fg3m") or 0,
+        three_pointers_attempted=box_score_data.get("threePointersAttempted") or box_score_data.get("fg3a") or 0,
+        free_throws_made=box_score_data.get("freeThrowsMade") or box_score_data.get("ftm") or 0,
+        free_throws_attempted=box_score_data.get("freeThrowsAttempted") or box_score_data.get("fta") or 0,
+        plus_minus=box_score_data.get("plusMinus") or box_score_data.get("plusMinus") or 0
+    )
+
+
+def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, inserted_pairs: set):
+    """Optimized batch insert with minimal duplicate checking.
+    
+    Args:
+        box_scores: List of BoxScore objects to insert
+        db: Database session
+        inserted_pairs: Set of (game_id, player_id) pairs already inserted (updated in place)
+    """
+    if not box_scores:
+        return
+    
+    # Filter out pairs we've already inserted in this session
+    new_box_scores = [
+        bs for bs in box_scores
+        if (bs.game_id, bs.player_id) not in inserted_pairs
+    ]
+    
+    if not new_box_scores:
+        return
+    
+    # For remaining, check only the exact pairs we're inserting (most efficient)
+    from sqlalchemy import text, or_
+    
+    pairs_to_check = {(bs.game_id, bs.player_id) for bs in new_box_scores}
+    
+    # Use OR conditions to check exact (game_id, player_id) pairs
+    # This is faster than IN queries as it uses the composite index
+    conditions = [
+        and_(BoxScore.game_id == gid, BoxScore.player_id == pid)
+        for gid, pid in pairs_to_check
+    ]
+    
+    if conditions:
+        # Query only the exact pairs we're checking (uses composite index)
+        existing = db.query(BoxScore.game_id, BoxScore.player_id).filter(
+            or_(*conditions)
+        ).all()
+        existing_pairs = {(e[0], e[1]) for e in existing}
+    else:
+        existing_pairs = set()
+    
+    # Filter out database duplicates
+    final_box_scores = [
+        bs for bs in new_box_scores
+        if (bs.game_id, bs.player_id) not in existing_pairs
+    ]
+    
+    # Update inserted_pairs with what we're about to insert
+    for bs in final_box_scores:
+        inserted_pairs.add((bs.game_id, bs.player_id))
+    
+    if final_box_scores:
+        try:
+            # Use bulk_save_objects for speed
+            db.bulk_save_objects(final_box_scores, update_changed_only=False)
+            db.commit()
+        except Exception as e:
+            # If bulk fails (e.g., duplicate constraint), try individual with ignore
+            db.rollback()
+            from sqlalchemy import text
+            for bs in final_box_scores:
+                try:
+                    # Try bulk insert first, fall back to individual
+                    db.add(bs)
+                    db.commit()
+                    inserted_pairs.add((bs.game_id, bs.player_id))
+                except Exception:
+                    # Duplicate or other error - skip this one
+                    db.rollback()
+                    continue
+
+
+def _batch_insert_box_scores(box_scores: List[BoxScore], db: Session):
+    """Legacy batch insert function (kept for compatibility)."""
+    inserted_pairs = set()
+    _batch_insert_box_scores_optimized(box_scores, db, inserted_pairs)
 
 
 def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, use_nba_api_lib: bool = True):
@@ -298,16 +464,64 @@ def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, u
         print("⚠️  No players data found")
         player_map = {}
     
-    # 3. Ingest games (this might be limited by API)
-    print("🏀 Fetching games...")
-    games_data = client.get_games(season)
+    # 3. Ingest games for entire season
+    print("🏀 Fetching games for season...")
+    games_data = client.get_games(season, game_date="season")
     if games_data:
         game_count = 0
+        game_id_map = {}  # Map NBA game ID to our database game ID
+        
         for game_data in games_data:
-            game_id = ingest_game(game_data, team_map, db)
-            if game_id:
+            db_game_id = ingest_game(game_data, team_map, db)
+            if db_game_id:
                 game_count += 1
+                nba_game_id = game_data.get("gameId")
+                if nba_game_id:
+                    game_id_map[nba_game_id] = db_game_id
+        
         print(f"✅ Ingested {game_count} games")
+        
+        # 4. Ingest box scores for all games (optimized with batch processing)
+        if game_id_map and player_map:
+            print("📊 Fetching box scores...")
+            box_score_count = 0
+            total_games = len(game_id_map)
+            batch_size = 200  # Increased batch size for better performance
+            batch = []
+            inserted_pairs = set()  # Track what we've inserted in this session
+            
+            for idx, (nba_game_id, db_game_id) in enumerate(game_id_map.items(), 1):
+                if idx % 10 == 0:
+                    print(f"   Progress: {idx}/{total_games} games processed ({box_score_count} box scores so far)...")
+                
+                box_scores_data = client.get_box_score(nba_game_id)
+                for box_score_data in box_scores_data:
+                    box_score_obj = _create_box_score_object(box_score_data, db_game_id, player_map, db)
+                    if box_score_obj:
+                        # Skip if we've already inserted this pair in this session
+                        pair = (box_score_obj.game_id, box_score_obj.player_id)
+                        if pair not in inserted_pairs:
+                            batch.append(box_score_obj)
+                            inserted_pairs.add(pair)
+                            
+                            # Batch commit for performance
+                            if len(batch) >= batch_size:
+                                _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
+                                box_score_count += len(batch)
+                                batch = []
+                
+                # Periodically clear inserted_pairs to free memory (every 500 games)
+                if idx % 500 == 0:
+                    inserted_pairs.clear()  # Will re-check database for next batch
+            
+            # Commit remaining box scores
+            if batch:
+                _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
+                box_score_count += len(batch)
+            
+            print(f"✅ Ingested {box_score_count} box score entries")
+        else:
+            print("⚠️  Skipping box scores (no games or players found)")
     else:
         print("⚠️  No games data found")
     
