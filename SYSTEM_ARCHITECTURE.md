@@ -34,8 +34,8 @@
 │                                                                   │
 │  ┌──────────────┐         ┌──────────────┐                     │
 │  │   Clients    │────────▶│   API Docs    │                     │
-│  │  (Browsers,  │         │  (Swagger/   │                     │
-│  │   Mobile,    │         │   ReDoc)     │                     │
+│  │  (Browsers,  │         │  (Swagger)   │                     │
+│  │   Mobile,    │         │              │                     │
 │  │   Postman)   │         └──────────────┘                     │
 │  └──────────────┘                                                │
 │                                                                   │
@@ -51,7 +51,7 @@
 - **Responsibilities**:
   - HTTP request handling
   - Route registration
-  - API documentation (Swagger/ReDoc)
+  - API documentation (Swagger)
   - Database initialization on startup
   - Health checks
 
@@ -305,7 +305,6 @@ http://localhost:8000
 GET  /              → API info
 GET  /health        → Health check
 GET  /docs          → Swagger UI
-GET  /redoc         → ReDoc documentation
 ```
 
 #### Teams Endpoints (`/teams`)
