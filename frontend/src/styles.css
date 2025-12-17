@@ -1,0 +1,323 @@
+/* Reuse the visual language from the backend-served UI, adapted for SPA */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top, #111827 0, #020617 45%, #000 100%);
+  color: #e5e7eb;
+}
+
+.app-root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.4);
+  backdrop-filter: blur(12px);
+  background: linear-gradient(to right, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.6));
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.logo {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  color: #e5e7eb;
+}
+
+.logo-accent {
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  background: linear-gradient(to right, #f97316, #e11d48, #0ea5e9);
+  color: #020617;
+  font-size: 0.8rem;
+}
+
+.nav-links {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav-link {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nav-link:hover {
+  color: #e5e7eb;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.nav-link.is-active {
+  color: #f9fafb;
+  background: linear-gradient(to right, #0ea5e9, #6366f1);
+}
+
+.docs-link {
+  font-size: 0.85rem;
+  color: #38bdf8;
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid rgba(56, 189, 248, 0.6);
+  background: rgba(15, 23, 42, 0.6);
+  transition: all 0.15s ease;
+}
+
+.docs-link:hover {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: #38bdf8;
+}
+
+.app-main {
+  flex: 1;
+  padding: 1.5rem 2rem 2.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.app-footer {
+  padding: 0.75rem 2rem 1.25rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(31, 41, 55, 0.9);
+  background: radial-gradient(circle at top, #020617 0, #020617 35%, #000 100%);
+}
+
+.divider {
+  opacity: 0.5;
+}
+
+.card {
+  background: radial-gradient(circle at top left, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.95));
+  border-radius: 1rem;
+  padding: 1.1rem 1.3rem 1.3rem;
+  box-shadow:
+    0 18px 40px rgba(15, 23, 42, 0.8),
+    0 0 0 1px rgba(148, 163, 184, 0.15);
+  border: 1px solid rgba(75, 85, 99, 0.6);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 1.2rem;
+}
+
+.split-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.btn {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  background: rgba(15, 23, 42, 0.8);
+  color: #e5e7eb;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: all 0.15s ease;
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: linear-gradient(to right, #22c55e, #16a34a);
+  color: #022c22;
+  font-weight: 600;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.btn.primary:hover {
+  box-shadow: 0 10px 25px rgba(22, 163, 74, 0.4);
+}
+
+label {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+input[type="number"],
+input[type="text"] {
+  border-radius: 999px;
+  border: 1px solid rgba(55, 65, 81, 0.9);
+  background: rgba(15, 23, 42, 0.9);
+  color: #e5e7eb;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.85rem;
+  outline: none;
+  width: 100px;
+}
+
+input::placeholder {
+  color: #6b7280;
+}
+
+input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.7);
+}
+
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.status-bar {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin-bottom: 0.5rem;
+  min-height: 1rem;
+}
+
+.status-bar.error {
+  color: #fca5a5;
+}
+
+.status-bar.success {
+  color: #bbf7d0;
+}
+
+.bullet-list {
+  padding-left: 1.2rem;
+  margin: 0.5rem 0 1rem;
+  color: #d1d5db;
+  font-size: 0.9rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+thead {
+  background: linear-gradient(to right, rgba(30, 64, 175, 0.7), rgba(37, 99, 235, 0.4));
+}
+
+th,
+td {
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(31, 41, 55, 0.85);
+}
+
+th {
+  font-weight: 600;
+  color: #f9fafb;
+}
+
+tbody tr:nth-child(even) {
+  background: rgba(15, 23, 42, 0.7);
+}
+
+tbody tr:hover {
+  background: rgba(30, 64, 175, 0.52);
+}
+
+.table-container {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(55, 65, 81, 0.9);
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.9);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.code-block {
+  background: #020617;
+  border-radius: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 0.8rem;
+  color: #e5e7eb;
+  border: 1px solid rgba(31, 41, 55, 0.9);
+  overflow: auto;
+}
+
+.code-block.small {
+  max-height: 280px;
+}
+
+.code-block.muted {
+  opacity: 0.8;
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .app-main {
+    padding-inline: 1rem;
+  }
+
+  .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .controls-row {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}
+
+

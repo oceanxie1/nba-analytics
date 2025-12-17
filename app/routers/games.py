@@ -30,7 +30,7 @@ def get_game(game_id: int, db: Session = Depends(get_db)):
 
 @router.post("/box-scores", response_model=BoxScoreSchema, status_code=201)
 def create_box_score(box_score: BoxScoreCreate, db: Session = Depends(get_db)):
-    """Create a new box score entry."""
+    """Create a new box score entry (by box score payload, not game ID)."""
     db_box_score = BoxScore(**box_score.dict())
     db.add(db_box_score)
     db.commit()
@@ -45,4 +45,13 @@ def get_box_score(box_score_id: int, db: Session = Depends(get_db)):
     if not box_score:
         raise HTTPException(status_code=404, detail="Box score not found")
     return box_score
+
+
+@router.get("/{game_id}/box-scores", response_model=List[BoxScoreSchema])
+def get_box_scores_for_game(game_id: int, db: Session = Depends(get_db)):
+    """Get all box scores for a specific game."""
+    # We intentionally return an empty list (200) if there are no box scores yet
+    # instead of a 404, so clients can distinguish "no data" from "bad route".
+    box_scores = db.query(BoxScore).filter(BoxScore.game_id == game_id).all()
+    return box_scores
 
