@@ -7,7 +7,8 @@ from nba_api.stats.endpoints import (
     commonteamyears,
     ScoreboardV2,
     BoxScoreTraditionalV2,
-    playergamelog
+    playergamelog,
+    commonteamroster
 )
 from nba_api.stats.static import teams, players
 import time
@@ -16,20 +17,30 @@ import time
 class NBAAPIClient:
     """Client using the nba_api library (more reliable than direct API calls)."""
     
-    def __init__(self, rate_limit_delay: float = 0.6):
+    def __init__(self, rate_limit_delay: float = 2.0):
         """Initialize NBA API client.
         
         Args:
-            rate_limit_delay: Seconds to wait between API calls
+            rate_limit_delay: Seconds to wait between API calls (default: 2.0s to avoid throttling)
         """
         self.rate_limit_delay = rate_limit_delay
         self.last_request_time = 0
         self._team_id_to_abbr = {}  # Cache for team ID to abbreviation mapping
         self._request_count = 0  # Track number of requests
         self._slow_request_count = 0  # Track slow requests
+        self._consecutive_failures = 0  # Track consecutive failures
+        self._circuit_breaker_active = False  # Circuit breaker to pause after many failures
     
     def _rate_limit(self):
-        """Enforce rate limiting with adaptive delay."""
+        """Enforce rate limiting with adaptive delay and circuit breaker."""
+        # Circuit breaker: if we've had too many failures, pause longer
+        if self._circuit_breaker_active:
+            pause_time = 30.0  # 30 second pause
+            print(f"   🔴 Circuit breaker active. Pausing {pause_time}s to let API recover...")
+            time.sleep(pause_time)
+            self._circuit_breaker_active = False
+            self._consecutive_failures = 0  # Reset after pause
+        
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         
@@ -37,14 +48,24 @@ class NBAAPIClient:
         self._request_count += 1
         adaptive_delay = self.rate_limit_delay
         
-        # Aggressively increase delay if we've had slow requests
-        if self._slow_request_count > 5:
+        # Aggressively increase delay if we've had consecutive failures (API is throttling)
+        if self._consecutive_failures >= 10:
+            # Activate circuit breaker after 10 consecutive failures
+            self._circuit_breaker_active = True
+            adaptive_delay = 10.0  # Very long delay
+        elif self._consecutive_failures > 5:
+            adaptive_delay = self.rate_limit_delay * 8.0  # 8x delay after many failures
+            print(f"   ⚠️  Heavy API throttling detected. Increasing delay to {adaptive_delay:.1f}s...")
+        elif self._consecutive_failures > 2:
+            adaptive_delay = self.rate_limit_delay * 4.0  # 4x delay after some failures
+        elif self._slow_request_count > 5:
             adaptive_delay = self.rate_limit_delay * 2.0  # Double the delay
         elif self._slow_request_count > 2:
             adaptive_delay = self.rate_limit_delay * 1.5
-        elif self._request_count > 300:
-            # After 300 requests, add small extra delay to avoid throttling
-            adaptive_delay = self.rate_limit_delay * 1.2
+        elif self._request_count > 100:
+            # After 100 requests, start increasing delay gradually (sooner than before)
+            multiplier = 1.0 + (self._request_count - 100) / 300  # Gradually increase
+            adaptive_delay = self.rate_limit_delay * multiplier
         
         if time_since_last < adaptive_delay:
             time.sleep(adaptive_delay - time_since_last)
@@ -105,38 +126,94 @@ class NBAAPIClient:
                 season = f"{current_year - 1}-{str(current_year)[2:]}"
         
         try:
-            # Get all players for the season
-            if team_id:
-                # Filter by team (would need team_id mapping)
-                all_players = commonallplayers.CommonAllPlayers(
-                    is_only_current_season=1,
-                    league_id='00',
-                    season=season
-                )
-            else:
-                all_players = commonallplayers.CommonAllPlayers(
-                    is_only_current_season=1,
-                    league_id='00',
-                    season=season
-                )
-            
-            df = all_players.get_data_frames()[0]
-            
-            # Convert DataFrame to list of dicts
+            # Method 1: Try to get players from team rosters (more complete)
+            # This gets all players currently on team rosters
+            print(f"   📡 Fetching players from team rosters...")
             players_data = []
-            for _, row in df.iterrows():
-                players_data.append({
-                    "name": row.get("DISPLAY_FIRST_LAST", ""),
-                    "playerId": row.get("PERSON_ID"),
-                    "teamAbbreviation": row.get("TEAM_ABBREVIATION", ""),
-                    "position": None,  # Would need additional call
-                    "height": None,    # Would need additional call
-                    "weight": None     # Would need additional call
-                })
+            seen_player_ids = set()  # Track by ID to avoid duplicates
             
+            # Get all teams first
+            nba_teams = teams.get_teams()
+            team_count = 0
+            
+            for team in nba_teams:
+                team_id = team["id"]
+                self._rate_limit()  # Rate limit between team requests
+                
+                try:
+                    roster = commonteamroster.CommonTeamRoster(
+                        season=season,
+                        team_id=team_id
+                    )
+                    df_roster = roster.get_data_frames()[0]
+                    
+                    if not df_roster.empty:
+                        team_count += 1
+                        for _, row in df_roster.iterrows():
+                            player_id = row.get("PLAYER_ID")
+                            if player_id and player_id not in seen_player_ids:
+                                seen_player_ids.add(player_id)
+                                player_name = row.get("PLAYER", "")
+                                if player_name and not pd.isna(player_name):
+                                    players_data.append({
+                                        "name": player_name,
+                                        "playerId": player_id,
+                                        "teamAbbreviation": team["abbreviation"],
+                                        "position": row.get("POSITION", None),
+                                        "height": row.get("HEIGHT", None),
+                                        "weight": row.get("WEIGHT", None)
+                                    })
+                except Exception as e:
+                    # Skip teams that fail, continue with others
+                    continue
+            
+            print(f"   📊 Found {len(players_data)} players from {team_count} team rosters")
+            
+            # Method 2: Fallback - if we got very few players, try CommonAllPlayers
+            if len(players_data) < 200:
+                print(f"   ⚠️  Got fewer players than expected, trying CommonAllPlayers as fallback...")
+                self._rate_limit()
+                all_players = commonallplayers.CommonAllPlayers(
+                    is_only_current_season=1,
+                    league_id='00',
+                    season=season
+                )
+                df = all_players.get_data_frames()[0]
+                
+                if not df.empty:
+                    # Add players we haven't seen yet
+                    for _, row in df.iterrows():
+                        player_id = row.get("PERSON_ID")
+                        if player_id and player_id not in seen_player_ids:
+                            seen_player_ids.add(player_id)
+                            player_name = row.get("DISPLAY_FIRST_LAST", "")
+                            if player_name and not pd.isna(player_name):
+                                players_data.append({
+                                    "name": player_name,
+                                    "playerId": player_id,
+                                    "teamAbbreviation": row.get("TEAM_ABBREVIATION", ""),
+                                    "position": None,
+                                    "height": None,
+                                    "weight": None
+                                })
+                    print(f"   📊 Added {len(players_data)} total players (including fallback)")
+            
+            if not players_data:
+                print(f"⚠️  No players found")
+                return []
+            
+            print(f"   ✅ Processed {len(players_data)} unique players")
             return players_data
+        except KeyError as e:
+            print(f"Error fetching players (KeyError): {e}")
+            print(f"   This usually means the API response format changed or season '{season}' is invalid")
+            import traceback
+            traceback.print_exc()
+            return []
         except Exception as e:
             print(f"Error fetching players: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def get_games(self, season: str, game_date: Optional[str] = None) -> List[Dict]:
@@ -353,14 +430,19 @@ class NBAAPIClient:
         """Fetch box score for a specific game with retry logic.
         
         Args:
-            game_id: NBA game ID
+            game_id: NBA game ID (should be 10 digits, e.g., "0022300270")
             max_retries: Maximum number of retry attempts
             timeout: Timeout in seconds (not directly used by nba_api, but tracked)
         
         Returns:
-            List of box score dictionaries (empty list on failure)
+            List of box score dictionaries (empty list on failure or invalid game)
         """
         import time as time_module
+        
+        # Validate game ID format
+        if not game_id or len(str(game_id)) != 10:
+            print(f"   ⚠️  Invalid game ID format: {game_id} (expected 10 digits)")
+            return []
         
         for attempt in range(max_retries):
             self._rate_limit()
@@ -370,6 +452,14 @@ class NBAAPIClient:
                 box_score = BoxScoreTraditionalV2(game_id=game_id)
                 df = box_score.get_data_frames()[0]  # Player stats
                 elapsed = time_module.time() - start_time
+                
+                # Check if this is a valid response or an error
+                # Sometimes the API returns empty data for games that don't exist
+                if df.empty:
+                    # This could mean the game doesn't have box scores yet (future game, cancelled, etc.)
+                    if attempt == 0:  # Only log on first attempt
+                        print(f"   ℹ️  No box score data available for game {game_id} (may be future/cancelled game)")
+                    return []
                 
                 # Track slow requests
                 if elapsed > 5.0:
@@ -430,15 +520,35 @@ class NBAAPIClient:
                 return box_scores_data
                 
             except Exception as e:
+                error_str = str(e).lower()
+                
+                # Check if this is a "game not found" type error vs a timeout
+                if "404" in error_str or "not found" in error_str or "invalid" in error_str:
+                    # Game doesn't exist or is invalid - don't retry, just skip
+                    print(f"   ⚠️  Game {game_id} not found or invalid - skipping")
+                    return []
+                
+                # Track consecutive failures (only for real errors, not "not found")
+                self._consecutive_failures += 1
+                
                 if attempt < max_retries - 1:
-                    # Exponential backoff: wait 2^attempt seconds
-                    wait_time = 2 ** attempt
+                    # Exponential backoff with much longer waits for timeouts
+                    if "timeout" in error_str or "timed out" in error_str:
+                        wait_time = (2 ** attempt) * 5  # Much longer wait for timeouts: 5s, 10s, 20s
+                    else:
+                        wait_time = (2 ** attempt) * 2  # Longer normal backoff: 2s, 4s, 8s
+                    
                     print(f"   ⚠️  Error fetching box score for game {game_id} (attempt {attempt + 1}/{max_retries}): {e}")
                     print(f"   Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
                     # Final attempt failed
                     print(f"   ❌ Failed to fetch box score for game {game_id} after {max_retries} attempts: {e}")
+                    # Add extra delay after failure to avoid hammering the API
+                    if self._consecutive_failures > 3:
+                        extra_delay = 10.0  # Longer pause
+                        print(f"   ⏸️  Pausing {extra_delay}s to avoid API throttling...")
+                        time.sleep(extra_delay)
                     return []
         
         return []  # Should never reach here, but just in case

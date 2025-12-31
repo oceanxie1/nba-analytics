@@ -294,6 +294,32 @@ def _create_box_score_object(box_score_data: Dict, game_id: int, player_map: Dic
     
     # Fast dictionary lookup
     player_id = player_map.get(player_name)
+    
+    # If player not found, create them dynamically
+    if not player_id:
+        # Check if player exists in DB but not in map
+        existing_player = db.query(Player).filter(Player.name == player_name).first()
+        if existing_player:
+            player_id = existing_player.id
+            player_map[player_name] = player_id  # Add to map for future lookups
+        else:
+            # Create new player (we don't have team info from box score, so leave it None)
+            new_player = Player(
+                name=player_name,
+                position=None,
+                height=None,
+                weight=None,
+                birth_date=None,
+                team_id=None  # Will be updated later if we get team info
+            )
+            db.add(new_player)
+            db.flush()
+            player_id = new_player.id
+            player_map[player_name] = player_id
+            # Only log first few to avoid spam
+            if len(player_map) <= 200:  # Only log if we're still building the map
+                print(f"   ➕ Created new player: '{player_name}' (ID: {player_id})")
+    
     if not player_id:
         return None
     
@@ -366,31 +392,26 @@ def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, 
     ]
     
     if not new_box_scores:
+        print(f"   ⚠️  All {len(box_scores)} box scores already in inserted_pairs (in-memory duplicates)")
         return 0
     
-    # Skip database duplicate check if we have many pairs (assume they're new)
-    # Only check DB if we have a small batch (likely duplicates from retry)
+    # Always check database for duplicates (don't skip for large batches)
+    # This ensures we don't insert duplicates even if in-memory tracking was cleared
     pairs_to_check = {(bs.game_id, bs.player_id) for bs in new_box_scores}
     
-    if len(pairs_to_check) > 100:
-        # Large batch - assume most are new, skip expensive DB query
-        # The in-memory tracking should catch most duplicates
-        existing_pairs = set()
+    from sqlalchemy import text, or_, and_
+    conditions = [
+        and_(BoxScore.game_id == gid, BoxScore.player_id == pid)
+        for gid, pid in pairs_to_check
+    ]
+    
+    if conditions:
+        existing = db.query(BoxScore.game_id, BoxScore.player_id).filter(
+            or_(*conditions)
+        ).all()
+        existing_pairs = {(e[0], e[1]) for e in existing}
     else:
-        # Small batch - do quick DB check (might be retrying duplicates)
-        from sqlalchemy import text, or_, and_
-        conditions = [
-            and_(BoxScore.game_id == gid, BoxScore.player_id == pid)
-            for gid, pid in pairs_to_check
-        ]
-        
-        if conditions:
-            existing = db.query(BoxScore.game_id, BoxScore.player_id).filter(
-                or_(*conditions)
-            ).all()
-            existing_pairs = {(e[0], e[1]) for e in existing}
-        else:
-            existing_pairs = set()
+        existing_pairs = set()
     
     # Filter out database duplicates
     final_box_scores = [
@@ -399,11 +420,13 @@ def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, 
     ]
     
     if not final_box_scores:
+        print(f"   ⚠️  All {len(new_box_scores)} box scores already exist in database (DB duplicates)")
         return 0
     
-    # Update inserted_pairs with what we're about to insert
-    for bs in final_box_scores:
-        inserted_pairs.add((bs.game_id, bs.player_id))
+    if len(existing_pairs) > 0:
+        print(f"   ℹ️  Filtered out {len(existing_pairs)} duplicates, inserting {len(final_box_scores)} new box scores")
+    
+    # DON'T update inserted_pairs yet - only after successful insert
     
     inserted_count = 0
     if final_box_scores:
@@ -412,23 +435,35 @@ def _batch_insert_box_scores_optimized(box_scores: List[BoxScore], db: Session, 
             db.bulk_save_objects(final_box_scores, update_changed_only=False)
             db.commit()
             inserted_count = len(final_box_scores)
+            # Only add to inserted_pairs AFTER successful insert
+            for bs in final_box_scores:
+                inserted_pairs.add((bs.game_id, bs.player_id))
+            print(f"   ✅ Successfully inserted {inserted_count} box scores via bulk insert")
         except Exception as e:
             # If bulk fails (e.g., duplicate constraint), try individual with ignore
             db.rollback()
-            from sqlalchemy import text
+            print(f"   ⚠️  Bulk insert failed: {e}, trying individual inserts...")
+            individual_success = 0
+            individual_failures = 0
             for bs in final_box_scores:
                 try:
-                    # Try bulk insert first, fall back to individual
+                    # Try individual insert
                     db.add(bs)
                     db.commit()
+                    # Only add to inserted_pairs AFTER successful insert
                     inserted_pairs.add((bs.game_id, bs.player_id))
                     inserted_count += 1
-                except Exception:
+                    individual_success += 1
+                except Exception as e2:
                     # Duplicate or other error - skip this one
                     db.rollback()
-                    # Remove from inserted_pairs if it failed
-                    inserted_pairs.discard((bs.game_id, bs.player_id))
-                    continue
+                    individual_failures += 1
+                    # Only log first few errors to avoid spam
+                    if individual_failures <= 3:
+                        print(f"   ⚠️  Failed to insert box score for game {bs.game_id}, player {bs.player_id}: {e2}")
+            
+            if individual_failures > 0:
+                print(f"   ⚠️  Individual inserts: {individual_success} succeeded, {individual_failures} failed")
     
     return inserted_count
 
@@ -509,18 +544,69 @@ def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, u
             batch_size = 200  # Increased batch size for better performance
             batch = []
             inserted_pairs = set()  # Track what we've inserted in this session
+            force_commit_interval = 50  # Force commit every 50 games regardless of batch size
             
             import time as time_module
+            consecutive_failures = 0
+            max_consecutive_failures = 20  # Stop after 20 consecutive failures
+            skipped_games = []  # Track games we skip (no box score data)
+            
             for idx, (nba_game_id, db_game_id) in enumerate(game_id_map.items(), 1):
                 if idx % 10 == 0:
                     print(f"   Progress: {idx}/{total_games} games processed ({box_score_count} box scores so far)...")
+                    if skipped_games:
+                        print(f"   ℹ️  Skipped {len(skipped_games)} games (no box score data available)")
+                
+                # If too many consecutive failures, pause and warn
+                if consecutive_failures >= max_consecutive_failures:
+                    print(f"\n   ⛔ Stopping ingestion: {max_consecutive_failures} consecutive failures detected.")
+                    print(f"   💡 The NBA API appears to be blocking requests.")
+                    print(f"   💡 You can resume later - already processed games will be skipped.")
+                    print(f"   💡 Progress saved: {box_score_count} box scores from {idx-1} games.")
+                    if skipped_games:
+                        print(f"   💡 Skipped games: {len(skipped_games)} games had no box score data.\n")
+                    break
                 
                 # Time the API call to see if that's the bottleneck
                 api_start = time_module.time()
                 box_scores_data = client.get_box_score(nba_game_id)
                 api_time = time_module.time() - api_start
                 
+                # Track failures: distinguish between "no data" (skip) vs "error" (failure)
+                if not box_scores_data:
+                    # Check if this was a timeout/error vs just no data available
+                    # If it's a quick empty response (< 2s), it's likely just no data (future game, etc.)
+                    if api_time < 2.0:
+                        # Quick empty response = game probably doesn't have box scores (future/cancelled)
+                        skipped_games.append(nba_game_id)
+                        consecutive_failures = 0  # Don't count as failure - just skip
+                        # Log first few empty responses to understand what's happening
+                        if idx <= 10:
+                            print(f"   ℹ️  Game {nba_game_id}: Empty box score response (took {api_time:.2f}s)")
+                    else:
+                        # Slow/timed out = real failure (API throttling)
+                        consecutive_failures += 1
+                        if consecutive_failures % 5 == 0:
+                            print(f"   ⚠️  {consecutive_failures} consecutive failures. API may be throttling.")
+                else:
+                    consecutive_failures = 0  # Reset on success
+                    # Debug: Log successful box score fetches (especially first ones)
+                    if idx <= 10 or (box_score_count == 0 and idx % 50 == 0):
+                        print(f"   ✅ Game {nba_game_id}: Got {len(box_scores_data)} box score entries")
+                        if box_scores_data:
+                            sample_player = box_scores_data[0].get("playerName", "Unknown")
+                            print(f"   📝 Sample player: '{sample_player}'")
+                            if sample_player not in player_map:
+                                print(f"   ⚠️  Player '{sample_player}' NOT in player_map!")
+                                # Show some player_map keys for comparison
+                                sample_keys = list(player_map.keys())[:3]
+                                print(f"   📋 player_map has {len(player_map)} players. Sample: {sample_keys}")
+                            else:
+                                print(f"   ✅ Player '{sample_player}' found in player_map!")
+                
                 # Note: Slow API warnings are now handled inside get_box_score() with retry logic
+                
+                box_scores_added_this_game = 0
                 for box_score_data in box_scores_data:
                     box_score_obj = _create_box_score_object(box_score_data, db_game_id, player_map, db)
                     if box_score_obj:
@@ -528,7 +614,8 @@ def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, u
                         pair = (box_score_obj.game_id, box_score_obj.player_id)
                         if pair not in inserted_pairs:
                             batch.append(box_score_obj)
-                            inserted_pairs.add(pair)
+                            # DON'T add to inserted_pairs yet - only after successful insert
+                            box_scores_added_this_game += 1
                             
                             # Batch commit for performance
                             if len(batch) >= batch_size:
@@ -537,19 +624,43 @@ def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, u
                                 db_time = time_module.time() - db_start
                                 box_score_count += inserted  # Count only actually inserted
                                 
+                                if idx <= 10 or (box_score_count > 0 and box_score_count % 1000 == 0):
+                                    print(f"   💾 Committed batch: {inserted} box scores inserted (total: {box_score_count})")
+                                
                                 # Warn if DB operation is slow
                                 if db_time > 1.0 and idx % 50 == 0:
                                     print(f"   ⚠️  Slow DB operation: {db_time:.2f}s for batch at game {idx}")
                                 
                                 batch = []
+                    else:
+                        # Debug: why wasn't box score object created?
+                        if idx <= 5:
+                            player_name = box_score_data.get("playerName") or box_score_data.get("name")
+                            print(f"   ⚠️  Could not create box score for '{player_name}'")
+                
+                # Debug: show batch accumulation
+                if idx <= 10 or (box_score_count == 0 and idx % 20 == 0):
+                    print(f"   📦 Added {box_scores_added_this_game} box scores to batch (batch size: {len(batch)}/{batch_size}, total processed: {box_score_count})")
+                
+                # Force commit periodically to ensure progress is saved
+                if batch and (idx % force_commit_interval == 0):
+                    print(f"   💾 Force committing batch at game {idx} (batch size: {len(batch)})")
+                    db_start = time_module.time()
+                    inserted = _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
+                    db_time = time_module.time() - db_start
+                    box_score_count += inserted
+                    print(f"   ✅ Force committed {inserted} box scores (total: {box_score_count})")
+                    batch = []
                 
                 # Periodically clear inserted_pairs to free memory and reduce lookup time
                 # Clear more frequently to keep set size manageable
                 if idx % 200 == 0:
                     # Before clearing, commit any pending batch
                     if batch:
+                        print(f"   💾 Committing pending batch at game {idx} (batch size: {len(batch)})")
                         inserted = _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
                         box_score_count += inserted  # Count only actually inserted
+                        print(f"   ✅ Committed {inserted} box scores (total: {box_score_count})")
                         batch = []
                     # Clear to reduce memory and lookup overhead
                     inserted_pairs.clear()
@@ -557,8 +668,10 @@ def ingest_from_nba_api(season: str = "2023-24", db: Optional[Session] = None, u
             
             # Commit remaining box scores
             if batch:
+                print(f"   💾 Committing final batch (batch size: {len(batch)})")
                 inserted = _batch_insert_box_scores_optimized(batch, db, inserted_pairs)
                 box_score_count += inserted  # Count only actually inserted
+                print(f"   ✅ Committed {inserted} final box scores (total: {box_score_count})")
             
             print(f"✅ Ingested {box_score_count} box score entries")
         else:

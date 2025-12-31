@@ -1,6 +1,6 @@
 """Pydantic schemas for request/response validation."""
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import date, datetime
 
 
@@ -118,6 +118,21 @@ class SeasonStats(BaseModel):
     field_goal_percentage: Optional[float] = None
     three_point_percentage: Optional[float] = None
     free_throw_percentage: Optional[float] = None
+
+    class Config:
+        orm_mode = True
+
+
+# Player features schema (comprehensive analytics)
+class PlayerFeatures(BaseModel):
+    player_id: int
+    player_name: str
+    season: Optional[str] = None
+    games_played: int
+    totals: Dict
+    per_game: Dict
+    shooting_percentages: Dict
+    advanced_stats: Dict
 
     class Config:
         orm_mode = True

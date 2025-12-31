@@ -127,6 +127,10 @@ function PlayersView() {
   const [players, setPlayers] = useState([]);
   const [limit, setLimit] = useState(25);
   const [status, statusKind, setStatus] = useStatus();
+  const [selectedPlayerId, setSelectedPlayerId] = useState("");
+  const [season, setSeason] = useState("2023-24");
+  const [features, setFeatures] = useState(null);
+  const [featuresStatus, featuresStatusKind, setFeaturesStatus] = useStatus();
 
   const loadPlayers = async () => {
     const safeLimit = Number(limit) || 25;
@@ -143,6 +147,31 @@ function PlayersView() {
     } catch (err) {
       setStatus(`Error: ${err}`, "error");
       setPlayers([]);
+    }
+  };
+
+  const loadPlayerFeatures = async () => {
+    if (!selectedPlayerId.trim()) {
+      setFeaturesStatus("Enter a player ID.", "error");
+      setFeatures(null);
+      return;
+    }
+    setFeaturesStatus("Loading features...");
+    setFeatures(null);
+    try {
+      const id = encodeURIComponent(selectedPlayerId.trim());
+      const seasonParam = season.trim() ? `?season=${encodeURIComponent(season.trim())}` : "";
+      const res = await safeFetch(`/players/${id}/features${seasonParam}`);
+      if (!res.ok) {
+        setFeaturesStatus(`Error ${res.status}`, "error");
+        setFeatures(null);
+        return;
+      }
+      setFeatures(res.data);
+      setFeaturesStatus("Loaded player features.", "success");
+    } catch (err) {
+      setFeaturesStatus(`Error: ${err}`, "error");
+      setFeatures(null);
     }
   };
 
@@ -190,6 +219,70 @@ function PlayersView() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="card" style={{ marginTop: "1.5rem" }}>
+        <div className="card-header">
+          <h2>Player Features & Analytics</h2>
+          <div className="controls-row">
+            <label>
+              Player ID
+              <input
+                type="number"
+                value={selectedPlayerId}
+                onChange={(e) => setSelectedPlayerId(e.target.value)}
+                placeholder="e.g. 1"
+              />
+            </label>
+            <label>
+              Season (optional)
+              <input
+                type="text"
+                value={season}
+                onChange={(e) => setSeason(e.target.value)}
+                placeholder="2023-24"
+              />
+            </label>
+            <button type="button" className="btn primary" onClick={loadPlayerFeatures}>
+              Load Features
+            </button>
+          </div>
+        </div>
+        <div className={`status-bar ${featuresStatusKind}`}>{featuresStatus}</div>
+        {features && (
+          <div className="split-columns" style={{ marginTop: "1rem" }}>
+            <div>
+              <h3>Overview</h3>
+              <pre className="code-block small">
+                {pretty({
+                  player: features.player_name,
+                  season: features.season || "Career",
+                  games_played: features.games_played,
+                })}
+              </pre>
+              {features.per_game && (
+                <>
+                  <h3 style={{ marginTop: "1rem" }}>Per Game</h3>
+                  <pre className="code-block small">{pretty(features.per_game)}</pre>
+                </>
+              )}
+            </div>
+            <div>
+              {features.shooting_percentages && (
+                <>
+                  <h3>Shooting %</h3>
+                  <pre className="code-block small">{pretty(features.shooting_percentages)}</pre>
+                </>
+              )}
+              {features.advanced_stats && (
+                <>
+                  <h3 style={{ marginTop: "1rem" }}>Advanced Stats</h3>
+                  <pre className="code-block small">{pretty(features.advanced_stats)}</pre>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

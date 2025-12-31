@@ -2,10 +2,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Optional
+from typing import List, Optional, Dict
 from app.db import get_db
 from app.models import Player, BoxScore, Game
 from app.schemas import Player as PlayerSchema, PlayerCreate, SeasonStats
+from app.analytics.features import calculate_season_features, calculate_career_features, calculate_rolling_averages
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -103,4 +104,73 @@ def get_player_season_stats(
         three_point_percentage=three_point_percentage,
         free_throw_percentage=ft_percentage
     )
+
+
+@router.get("/{player_id}/features")
+def get_player_features(
+    player_id: int,
+    season: Optional[str] = Query(None, description="Season (e.g., '2023-24'). If not provided, returns career stats."),
+    db: Session = Depends(get_db)
+):
+    """Get comprehensive features for a player (season or career).
+    
+    Returns advanced stats including:
+    - Per-game averages
+    - Shooting percentages (FG%, 3P%, FT%, eFG%, TS%)
+    - Advanced metrics (PER, Usage Rate)
+    - Totals and per-game stats
+    """
+    # Verify player exists
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    if season:
+        # Get season features
+        features = calculate_season_features(db, player_id, season)
+        if "error" in features:
+            raise HTTPException(status_code=404, detail=features["error"])
+        
+        return {
+            "player_id": player_id,
+            "player_name": player.name,
+            "season": season,
+            **features
+        }
+    else:
+        # Get career features
+        features = calculate_career_features(db, player_id)
+        if "error" in features:
+            raise HTTPException(status_code=404, detail=features["error"])
+        
+        return {
+            "player_id": player_id,
+            "player_name": player.name,
+            "type": "career",
+            **features
+        }
+
+
+@router.get("/{player_id}/rolling-averages")
+def get_player_rolling_averages(
+    player_id: int,
+    season: Optional[str] = Query(None, description="Season filter (optional)"),
+    window: int = Query(5, ge=1, le=20, description="Number of games in rolling window"),
+    db: Session = Depends(get_db)
+):
+    """Get rolling averages for a player's recent games."""
+    # Verify player exists
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    rolling = calculate_rolling_averages(db, player_id, season=season, limit=window * 2)
+    
+    return {
+        "player_id": player_id,
+        "player_name": player.name,
+        "season": season,
+        "window": window,
+        "rolling_averages": rolling
+    }
 
