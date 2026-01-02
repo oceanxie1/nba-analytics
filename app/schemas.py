@@ -137,3 +137,18 @@ class PlayerFeatures(BaseModel):
     class Config:
         orm_mode = True
 
+
+# Team stats schema
+class TeamStats(BaseModel):
+    team_id: int
+    team_name: str
+    season: str
+    games_played: int
+    record: Dict
+    totals: Dict
+    per_game: Dict
+    shooting_percentages: Dict
+
+    class Config:
+        orm_mode = True
+
