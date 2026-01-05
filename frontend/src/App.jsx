@@ -912,41 +912,6 @@ function PlayerComparisonView() {
     <section className="view is-visible">
       <div className="card">
         <div className="card-header">
-          <h2>Player Comparison</h2>
-          <div className="controls-row">
-            <label>
-              Player IDs (comma-separated)
-              <input
-                type="text"
-                value={playerIds}
-                onChange={(e) => setPlayerIds(e.target.value)}
-                placeholder="e.g. 1,2,3"
-                style={{ width: "200px" }}
-              />
-            </label>
-            <label>
-              Season
-              <input
-                type="text"
-                value={season}
-                onChange={(e) => setSeason(e.target.value)}
-                placeholder="2023-24"
-                style={{ width: "120px" }}
-              />
-            </label>
-            <button type="button" className="btn primary" onClick={loadComparison}>
-              Compare Players
-            </button>
-          </div>
-        </div>
-        <div className={`status-bar ${comparisonStatusKind}`}>{comparisonStatus}</div>
-        <p className="hint" style={{ marginTop: "0.5rem" }}>
-          Enter 2-10 player IDs separated by commas. Best stats are highlighted in green, worst in red.
-        </p>
-      </div>
-
-      <div className="card" style={{ marginTop: "1.5rem" }}>
-        <div className="card-header">
           <h2>Player List (Reference)</h2>
           <button type="button" className="btn" onClick={loadPlayers}>
             Load Players
@@ -980,6 +945,41 @@ function PlayerComparisonView() {
             Showing first 50 of {players.length} players
           </p>
         )}
+      </div>
+
+      <div className="card" style={{ marginTop: "1.5rem" }}>
+        <div className="card-header">
+          <h2>Player Comparison</h2>
+          <div className="controls-row">
+            <label>
+              Player IDs (comma-separated)
+              <input
+                type="text"
+                value={playerIds}
+                onChange={(e) => setPlayerIds(e.target.value)}
+                placeholder="e.g. 1,2,3"
+                style={{ width: "200px" }}
+              />
+            </label>
+            <label>
+              Season
+              <input
+                type="text"
+                value={season}
+                onChange={(e) => setSeason(e.target.value)}
+                placeholder="2023-24"
+                style={{ width: "120px" }}
+              />
+            </label>
+            <button type="button" className="btn primary" onClick={loadComparison}>
+              Compare Players
+            </button>
+          </div>
+        </div>
+        <div className={`status-bar ${comparisonStatusKind}`}>{comparisonStatus}</div>
+        <p className="hint" style={{ marginTop: "0.5rem" }}>
+          Enter 2-10 player IDs separated by commas. Best stats are highlighted in green, worst in red.
+        </p>
       </div>
 
       {comparison && (
