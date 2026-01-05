@@ -18,8 +18,8 @@ export default function App() {
         {activeView === "overview" && <OverviewView />}
         {activeView === "players" && <PlayersView />}
         {activeView === "compare" && <PlayerComparisonView />}
-        {activeView === "compare-teams" && <TeamComparisonView />}
         {activeView === "teams" && <TeamsView />}
+        {activeView === "compare-teams" && <TeamComparisonView />}
         {activeView === "games" && <GamesView />}
       </main>
       <footer className="app-footer">
