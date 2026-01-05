@@ -138,6 +138,39 @@ class PlayerFeatures(BaseModel):
         orm_mode = True
 
 
+# Player comparison schemas
+class ComparisonPlayer(BaseModel):
+    player_id: int
+    player_name: str
+    team_id: Optional[int] = None
+    games_played: int
+    totals: Dict
+    per_game: Dict
+    shooting_percentages: Dict
+    advanced_stats: Dict
+
+
+class StatComparison(BaseModel):
+    player_index: int
+    player_id: int
+    player_name: str
+    value: float
+
+
+class ComparisonDetail(BaseModel):
+    best: StatComparison
+    worst: StatComparison
+
+
+class PlayerComparison(BaseModel):
+    season: str
+    players: List[ComparisonPlayer]
+    comparisons: Dict[str, ComparisonDetail]
+
+    class Config:
+        orm_mode = True
+
+
 # Team stats schema
 class TeamStats(BaseModel):
     team_id: int

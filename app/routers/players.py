@@ -5,8 +5,8 @@ from sqlalchemy import func
 from typing import List, Optional, Dict
 from app.db import get_db
 from app.models import Player, BoxScore, Game
-from app.schemas import Player as PlayerSchema, PlayerCreate, SeasonStats
-from app.analytics.features import calculate_season_features, calculate_career_features, calculate_rolling_averages
+from app.schemas import Player as PlayerSchema, PlayerCreate, SeasonStats, PlayerComparison
+from app.analytics.features import calculate_season_features, calculate_career_features, calculate_rolling_averages, compare_players
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -26,6 +26,53 @@ def list_players(
     
     players = query.offset(skip).limit(limit).all()
     return players
+
+
+@router.get("/compare", response_model=PlayerComparison)
+def compare_players_endpoint(
+    player_ids: str = Query(..., description="Comma-separated list of player IDs (e.g., '1,2,3')"),
+    season: str = Query(..., description="Season (e.g., '2023-24')"),
+    db: Session = Depends(get_db)
+):
+    """Compare multiple players side-by-side for a given season.
+    
+    Returns comprehensive stats for each player including:
+    - Per-game averages (points, rebounds, assists, etc.)
+    - Shooting percentages (FG%, 3P%, FT%, eFG%, TS%)
+    - Advanced stats (PER, Usage Rate)
+    - Comparisons highlighting best/worst performers for each stat
+    
+    Example:
+        GET /players/compare?player_ids=1,2,3&season=2023-24
+    """
+    # Parse player IDs
+    try:
+        player_id_list = [int(pid.strip()) for pid in player_ids.split(",")]
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid player_ids format. Expected comma-separated integers (e.g., '1,2,3')"
+        )
+    
+    if len(player_id_list) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="At least 2 player IDs are required for comparison"
+        )
+    
+    if len(player_id_list) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 10 players can be compared at once"
+        )
+    
+    # Get comparison data
+    comparison_result = compare_players(db, player_id_list, season)
+    
+    if "error" in comparison_result:
+        raise HTTPException(status_code=404, detail=comparison_result["error"])
+    
+    return comparison_result
 
 
 @router.get("/{player_id}", response_model=PlayerSchema)

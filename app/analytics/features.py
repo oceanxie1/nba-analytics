@@ -318,3 +318,160 @@ def calculate_career_features(
         }
     }
 
+
+def compare_players(
+    db: Session, player_ids: List[int], season: str
+) -> Dict:
+    """Compare multiple players side-by-side for a given season.
+    
+    Returns a dictionary with:
+    - season: The season being compared
+    - players: List of player stats for each player
+    - comparisons: Highlighted differences (best/worst for each stat)
+    """
+    if not player_ids or len(player_ids) < 2:
+        return {
+            "error": "At least 2 player IDs are required for comparison"
+        }
+    
+    if len(player_ids) > 10:
+        return {
+            "error": "Maximum 10 players can be compared at once"
+        }
+    
+    players_data = []
+    players_info = []
+    
+    # Get player info and stats for each player
+    for player_id in player_ids:
+        player = db.query(Player).filter(Player.id == player_id).first()
+        if not player:
+            return {
+                "error": f"Player {player_id} not found"
+            }
+        
+        features = calculate_season_features(db, player_id, season)
+        if "error" in features:
+            return {
+                "error": f"Player {player_id} ({player.name}): {features['error']}"
+            }
+        
+        players_info.append({
+            "player_id": player_id,
+            "player_name": player.name,
+            "team_id": player.team_id,
+        })
+        
+        players_data.append(features)
+    
+    # Calculate comparisons (find best/worst for key stats)
+    comparisons = {}
+    
+    # Per-game stats to compare
+    per_game_stats = ["points", "rebounds", "assists", "steals", "blocks", "turnovers"]
+    for stat in per_game_stats:
+        values = []
+        for i, player_features in enumerate(players_data):
+            value = player_features.get("per_game", {}).get(stat)
+            if value is not None:
+                values.append((i, value))
+        
+        if values:
+            # For turnovers, lower is better
+            if stat == "turnovers":
+                best_idx, best_val = min(values, key=lambda x: x[1])
+                worst_idx, worst_val = max(values, key=lambda x: x[1])
+            else:
+                best_idx, best_val = max(values, key=lambda x: x[1])
+                worst_idx, worst_val = min(values, key=lambda x: x[1])
+            
+            comparisons[f"per_game_{stat}"] = {
+                "best": {
+                    "player_index": best_idx,
+                    "player_id": player_ids[best_idx],
+                    "player_name": players_info[best_idx]["player_name"],
+                    "value": best_val
+                },
+                "worst": {
+                    "player_index": worst_idx,
+                    "player_id": player_ids[worst_idx],
+                    "player_name": players_info[worst_idx]["player_name"],
+                    "value": worst_val
+                }
+            }
+    
+    # Shooting percentages to compare
+    shooting_stats = ["field_goal_percentage", "three_point_percentage", "free_throw_percentage", 
+                      "effective_field_goal_percentage", "true_shooting_percentage"]
+    for stat in shooting_stats:
+        values = []
+        for i, player_features in enumerate(players_data):
+            value = player_features.get("shooting_percentages", {}).get(stat)
+            if value is not None:
+                values.append((i, value))
+        
+        if values:
+            best_idx, best_val = max(values, key=lambda x: x[1])
+            worst_idx, worst_val = min(values, key=lambda x: x[1])
+            
+            comparisons[f"shooting_{stat}"] = {
+                "best": {
+                    "player_index": best_idx,
+                    "player_id": player_ids[best_idx],
+                    "player_name": players_info[best_idx]["player_name"],
+                    "value": best_val
+                },
+                "worst": {
+                    "player_index": worst_idx,
+                    "player_id": player_ids[worst_idx],
+                    "player_name": players_info[worst_idx]["player_name"],
+                    "value": worst_val
+                }
+            }
+    
+    # Advanced stats
+    advanced_stats = ["player_efficiency_rating", "usage_rate"]
+    for stat in advanced_stats:
+        values = []
+        for i, player_features in enumerate(players_data):
+            value = player_features.get("advanced_stats", {}).get(stat)
+            if value is not None:
+                values.append((i, value))
+        
+        if values:
+            best_idx, best_val = max(values, key=lambda x: x[1])
+            worst_idx, worst_val = min(values, key=lambda x: x[1])
+            
+            comparisons[f"advanced_{stat}"] = {
+                "best": {
+                    "player_index": best_idx,
+                    "player_id": player_ids[best_idx],
+                    "player_name": players_info[best_idx]["player_name"],
+                    "value": best_val
+                },
+                "worst": {
+                    "player_index": worst_idx,
+                    "player_id": player_ids[worst_idx],
+                    "player_name": players_info[worst_idx]["player_name"],
+                    "value": worst_val
+                }
+            }
+    
+    # Combine player info with their stats
+    players_comparison = []
+    for i, (info, features) in enumerate(zip(players_info, players_data)):
+        players_comparison.append({
+            **info,
+            "games_played": features.get("games_played", 0),
+            "totals": features.get("totals", {}),
+            "per_game": features.get("per_game", {}),
+            "shooting_percentages": features.get("shooting_percentages", {}),
+            "advanced_stats": features.get("advanced_stats", {}),
+        })
+    
+    return {
+        "season": season,
+        "players": players_comparison,
+        "comparisons": comparisons
+    }
+

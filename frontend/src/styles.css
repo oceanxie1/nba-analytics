@@ -270,6 +270,40 @@ tbody tr:hover {
   background: rgba(30, 64, 175, 0.52);
 }
 
+/* Comparison highlighting */
+td.best {
+  background: rgba(34, 197, 94, 0.2) !important;
+  color: #86efac;
+  font-weight: 600;
+  border-left: 2px solid #22c55e;
+}
+
+td.worst {
+  background: rgba(239, 68, 68, 0.2) !important;
+  color: #fca5a5;
+  font-weight: 600;
+  border-left: 2px solid #ef4444;
+}
+
+td.best:hover,
+td.worst:hover {
+  background: rgba(30, 64, 175, 0.52) !important;
+}
+
+.hint {
+  color: #9ca3af;
+  font-size: 0.85rem;
+  margin: 0.5rem 0;
+}
+
+.view {
+  display: none;
+}
+
+.view.is-visible {
+  display: block;
+}
+
 .table-container {
   border-radius: 0.75rem;
   border: 1px solid rgba(55, 65, 81, 0.9);
