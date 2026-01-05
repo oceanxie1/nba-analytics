@@ -65,5 +65,3 @@ if __name__ == "__main__":
     season = sys.argv[1] if len(sys.argv) > 1 else "2023-24"
     test_team_rosters(season)
 
-
-

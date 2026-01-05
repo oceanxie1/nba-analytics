@@ -78,5 +78,3 @@ if __name__ == "__main__":
     
     test_box_score(game_id)
 
-
-

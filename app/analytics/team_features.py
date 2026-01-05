@@ -257,3 +257,163 @@ def calculate_game_team_stats(
         }
     }
 
+
+def compare_teams(
+    db: Session, team_ids: List[int], season: str
+) -> Dict:
+    """Compare multiple teams side-by-side for a given season.
+    
+    Returns a dictionary with:
+    - season: The season being compared
+    - teams: List of team stats for each team
+    - comparisons: Highlighted differences (best/worst for each stat)
+    """
+    if not team_ids or len(team_ids) < 2:
+        return {
+            "error": "At least 2 team IDs are required for comparison"
+        }
+    
+    if len(team_ids) > 10:
+        return {
+            "error": "Maximum 10 teams can be compared at once"
+        }
+    
+    teams_data = []
+    teams_info = []
+    
+    # Get team info and stats for each team
+    for team_id in team_ids:
+        team = db.query(Team).filter(Team.id == team_id).first()
+        if not team:
+            return {
+                "error": f"Team {team_id} not found"
+            }
+        
+        stats = calculate_team_season_stats(db, team_id, season)
+        if "error" in stats:
+            return {
+                "error": f"Team {team_id} ({team.name}): {stats['error']}"
+            }
+        
+        teams_info.append({
+            "team_id": team_id,
+            "team_name": team.name,
+            "abbreviation": team.abbreviation,
+        })
+        
+        teams_data.append(stats)
+    
+    # Calculate comparisons (find best/worst for key stats)
+    comparisons = {}
+    
+    # Record stats to compare
+    record_stats = ["wins", "win_percentage"]
+    for stat in record_stats:
+        values = []
+        for i, team_stats in enumerate(teams_data):
+            if stat == "wins":
+                value = team_stats.get("record", {}).get("wins")
+            elif stat == "win_percentage":
+                value = team_stats.get("record", {}).get("win_percentage")
+            if value is not None:
+                values.append((i, value))
+        
+        if values:
+            best_idx, best_val = max(values, key=lambda x: x[1])
+            worst_idx, worst_val = min(values, key=lambda x: x[1])
+            
+            comparisons[f"record_{stat}"] = {
+                "best": {
+                    "team_index": best_idx,
+                    "team_id": team_ids[best_idx],
+                    "team_name": teams_info[best_idx]["team_name"],
+                    "value": best_val
+                },
+                "worst": {
+                    "team_index": worst_idx,
+                    "team_id": team_ids[worst_idx],
+                    "team_name": teams_info[worst_idx]["team_name"],
+                    "value": worst_val
+                }
+            }
+    
+    # Per-game stats to compare
+    per_game_stats = ["points", "rebounds", "assists", "steals", "blocks", "turnovers"]
+    for stat in per_game_stats:
+        values = []
+        for i, team_stats in enumerate(teams_data):
+            value = team_stats.get("per_game", {}).get(stat)
+            if value is not None:
+                values.append((i, value))
+        
+        if values:
+            # For turnovers, lower is better
+            if stat == "turnovers":
+                best_idx, best_val = min(values, key=lambda x: x[1])
+                worst_idx, worst_val = max(values, key=lambda x: x[1])
+            else:
+                best_idx, best_val = max(values, key=lambda x: x[1])
+                worst_idx, worst_val = min(values, key=lambda x: x[1])
+            
+            comparisons[f"per_game_{stat}"] = {
+                "best": {
+                    "team_index": best_idx,
+                    "team_id": team_ids[best_idx],
+                    "team_name": teams_info[best_idx]["team_name"],
+                    "value": best_val
+                },
+                "worst": {
+                    "team_index": worst_idx,
+                    "team_id": team_ids[worst_idx],
+                    "team_name": teams_info[worst_idx]["team_name"],
+                    "value": worst_val
+                }
+            }
+    
+    # Shooting percentages to compare
+    shooting_stats = ["field_goal_percentage", "three_point_percentage", "free_throw_percentage", 
+                      "effective_field_goal_percentage", "true_shooting_percentage"]
+    for stat in shooting_stats:
+        values = []
+        for i, team_stats in enumerate(teams_data):
+            value = team_stats.get("shooting_percentages", {}).get(stat)
+            if value is not None:
+                values.append((i, value))
+        
+        if values:
+            best_idx, best_val = max(values, key=lambda x: x[1])
+            worst_idx, worst_val = min(values, key=lambda x: x[1])
+            
+            comparisons[f"shooting_{stat}"] = {
+                "best": {
+                    "team_index": best_idx,
+                    "team_id": team_ids[best_idx],
+                    "team_name": teams_info[best_idx]["team_name"],
+                    "value": best_val
+                },
+                "worst": {
+                    "team_index": worst_idx,
+                    "team_id": team_ids[worst_idx],
+                    "team_name": teams_info[worst_idx]["team_name"],
+                    "value": worst_val
+                }
+            }
+    
+    # Combine team info with their stats
+    teams_comparison = []
+    for i, (info, stats) in enumerate(zip(teams_info, teams_data)):
+        teams_comparison.append({
+            **info,
+            "games_played": stats.get("games_played", 0),
+            "record": stats.get("record", {}),
+            "totals": stats.get("totals", {}),
+            "per_game": stats.get("per_game", {}),
+            "shooting_percentages": stats.get("shooting_percentages", {}),
+        })
+    
+    return {
+        "season": season,
+        "teams": teams_comparison,
+        "comparisons": comparisons
+    }
+

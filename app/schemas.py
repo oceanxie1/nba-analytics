@@ -185,3 +185,36 @@ class TeamStats(BaseModel):
     class Config:
         orm_mode = True
 
+
+# Team comparison schemas
+class ComparisonTeam(BaseModel):
+    team_id: int
+    team_name: str
+    abbreviation: Optional[str] = None
+    games_played: int
+    record: Dict
+    totals: Dict
+    per_game: Dict
+    shooting_percentages: Dict
+
+
+class TeamStatComparison(BaseModel):
+    team_index: int
+    team_id: int
+    team_name: str
+    value: float
+
+
+class TeamComparisonDetail(BaseModel):
+    best: TeamStatComparison
+    worst: TeamStatComparison
+
+
+class TeamComparison(BaseModel):
+    season: str
+    teams: List[ComparisonTeam]
+    comparisons: Dict[str, TeamComparisonDetail]
+
+    class Config:
+        orm_mode = True
+

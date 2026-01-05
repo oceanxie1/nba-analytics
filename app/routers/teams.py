@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.db import get_db
 from app.models import Team, Game
-from app.schemas import Team as TeamSchema, TeamCreate, Game as GameSchema
-from app.analytics.team_features import calculate_team_season_stats, calculate_game_team_stats
+from app.schemas import Team as TeamSchema, TeamCreate, Game as GameSchema, TeamComparison
+from app.analytics.team_features import calculate_team_season_stats, calculate_game_team_stats, compare_teams
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -15,6 +15,53 @@ def list_teams(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """List all teams."""
     teams = db.query(Team).offset(skip).limit(limit).all()
     return teams
+
+
+@router.get("/compare", response_model=TeamComparison)
+def compare_teams_endpoint(
+    team_ids: str = Query(..., description="Comma-separated list of team IDs (e.g., '1,2')"),
+    season: str = Query(..., description="Season (e.g., '2023-24')"),
+    db: Session = Depends(get_db)
+):
+    """Compare multiple teams side-by-side for a given season.
+    
+    Returns comprehensive stats for each team including:
+    - Win/loss record (overall, home, away)
+    - Per-game averages (points, rebounds, assists, etc.)
+    - Shooting percentages (FG%, 3P%, FT%, eFG%, TS%)
+    - Comparisons highlighting best/worst performers for each stat
+    
+    Example:
+        GET /teams/compare?team_ids=1,2&season=2023-24
+    """
+    # Parse team IDs
+    try:
+        team_id_list = [int(tid.strip()) for tid in team_ids.split(",")]
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid team_ids format. Expected comma-separated integers (e.g., '1,2')"
+        )
+    
+    if len(team_id_list) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="At least 2 team IDs are required for comparison"
+        )
+    
+    if len(team_id_list) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 10 teams can be compared at once"
+        )
+    
+    # Get comparison data
+    comparison_result = compare_teams(db, team_id_list, season)
+    
+    if "error" in comparison_result:
+        raise HTTPException(status_code=404, detail=comparison_result["error"])
+    
+    return comparison_result
 
 
 @router.get("/{team_id}", response_model=TeamSchema)
