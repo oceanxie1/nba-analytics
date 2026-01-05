@@ -7,8 +7,8 @@ export default function Header({ activeView, onChangeView }) {
       { id: "overview", label: "Overview" },
       { id: "players", label: "Players" },
       { id: "compare", label: "Compare Players" },
-      { id: "compare-teams", label: "Compare Teams" },
       { id: "teams", label: "Teams" },
+      { id: "compare-teams", label: "Compare Teams" },
       { id: "games", label: "Games" },
     ],
     []
