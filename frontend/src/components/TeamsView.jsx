@@ -172,28 +172,105 @@ export default function TeamsView() {
         </div>
         <div className={`status-bar ${teamStatsStatusKind}`}>{teamStatsStatus}</div>
         {teamStats && (
-          <div className="split-columns" style={{ marginTop: "1rem" }}>
-            <div>
-              <h3>Record</h3>
-              <pre className="code-block small">{pretty(teamStats.record)}</pre>
-              <h3 style={{ marginTop: "1rem" }}>Per Game</h3>
-              <pre className="code-block small">{pretty(teamStats.per_game)}</pre>
+          <div style={{ marginTop: "1rem" }}>
+            <div className="split-columns">
+              <div>
+                <h3>Record</h3>
+                <pre className="code-block small">{pretty(teamStats.record)}</pre>
+                <h3 style={{ marginTop: "1rem" }}>Per Game</h3>
+                <pre className="code-block small">{pretty(teamStats.per_game)}</pre>
+              </div>
+              <div>
+                <h3>Shooting %</h3>
+                <pre className="code-block small">{pretty(teamStats.shooting_percentages)}</pre>
+                {teamStats.totals && (
+                  <>
+                    <h3 style={{ marginTop: "1rem" }}>Season Totals</h3>
+                    <pre className="code-block small">{pretty({
+                      points: teamStats.totals.points,
+                      rebounds: teamStats.totals.rebounds,
+                      assists: teamStats.totals.assists,
+                      games_played: teamStats.games_played
+                    })}</pre>
+                  </>
+                )}
+              </div>
             </div>
-            <div>
-              <h3>Shooting %</h3>
-              <pre className="code-block small">{pretty(teamStats.shooting_percentages)}</pre>
-              {teamStats.totals && (
-                <>
-                  <h3 style={{ marginTop: "1rem" }}>Season Totals</h3>
-                  <pre className="code-block small">{pretty({
-                    points: teamStats.totals.points,
-                    rebounds: teamStats.totals.rebounds,
-                    assists: teamStats.totals.assists,
-                    games_played: teamStats.games_played
-                  })}</pre>
-                </>
-              )}
-            </div>
+            
+            {/* Advanced Metrics */}
+            {teamStats.advanced_metrics && (
+              <div style={{ marginTop: "1.5rem" }}>
+                <h3>Advanced Metrics</h3>
+                <div className="table-container" style={{ marginTop: "0.5rem" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><strong>Pace</strong></td>
+                        <td>{teamStats.advanced_metrics.pace != null ? `${teamStats.advanced_metrics.pace} poss/game` : "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Offensive Rating</strong></td>
+                        <td>{teamStats.advanced_metrics.offensive_rating != null ? `${teamStats.advanced_metrics.offensive_rating} pts/100 poss` : "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Defensive Rating</strong></td>
+                        <td>{teamStats.advanced_metrics.defensive_rating != null ? `${teamStats.advanced_metrics.defensive_rating} pts/100 poss` : "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Net Rating</strong></td>
+                        <td style={{ 
+                          color: teamStats.advanced_metrics.net_rating > 0 ? "#86efac" : teamStats.advanced_metrics.net_rating < 0 ? "#fca5a5" : "#e5e7eb",
+                          fontWeight: 600
+                        }}>
+                          {teamStats.advanced_metrics.net_rating != null ? `${teamStats.advanced_metrics.net_rating > 0 ? "+" : ""}${teamStats.advanced_metrics.net_rating} pts/100 poss` : "-"}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            
+            {/* Four Factors */}
+            {teamStats.four_factors && (
+              <div style={{ marginTop: "1.5rem" }}>
+                <h3>Four Factors</h3>
+                <div className="table-container" style={{ marginTop: "0.5rem" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Factor</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><strong>eFG%</strong> (Effective FG%)</td>
+                        <td>{teamStats.four_factors.effective_field_goal_percentage != null ? `${teamStats.four_factors.effective_field_goal_percentage}%` : "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>TOV%</strong> (Turnover %)</td>
+                        <td>{teamStats.four_factors.turnover_percentage != null ? `${teamStats.four_factors.turnover_percentage}%` : "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>FTA Rate</strong> (FT Attempt Rate)</td>
+                        <td>{teamStats.four_factors.free_throw_attempt_rate != null ? `${teamStats.four_factors.free_throw_attempt_rate}%` : "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>ORB%</strong> (Offensive Rebound %)</td>
+                        <td style={{ color: "#9ca3af" }}>N/A (data not available)</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -12,6 +12,52 @@ def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> f
     return numerator / denominator
 
 
+def calculate_possessions(fga: int, fta: int, tov: int, orb: int = 0) -> float:
+    """Calculate possessions using the standard formula.
+    
+    Formula: Possessions = FGA - ORB + TOV + 0.44 * FTA
+    
+    Note: Without offensive rebounds, we use a simplified formula:
+    Possessions ≈ FGA + 0.44 * FTA + TOV
+    """
+    return fga + 0.44 * fta + tov
+
+
+def calculate_offensive_rating(points: int, possessions: float) -> Optional[float]:
+    """Calculate Offensive Rating (points per 100 possessions)."""
+    if possessions == 0:
+        return None
+    return (points / possessions) * 100
+
+
+def calculate_defensive_rating(opponent_points: int, opponent_possessions: float) -> Optional[float]:
+    """Calculate Defensive Rating (opponent points per 100 possessions)."""
+    if opponent_possessions == 0:
+        return None
+    return (opponent_points / opponent_possessions) * 100
+
+
+def calculate_turnover_percentage(tov: int, fga: int, fta: int) -> Optional[float]:
+    """Calculate Turnover Percentage (TOV%).
+    
+    Formula: TOV% = (TOV / (FGA + 0.44 * FTA + TOV)) * 100
+    """
+    possessions = fga + 0.44 * fta + tov
+    if possessions == 0:
+        return None
+    return (tov / possessions) * 100
+
+
+def calculate_fta_rate(fta: int, fga: int) -> Optional[float]:
+    """Calculate Free Throw Attempt Rate (FTA Rate).
+    
+    Formula: FTA Rate = FTA / FGA
+    """
+    if fga == 0:
+        return None
+    return (fta / fga) * 100
+
+
 def get_team_games(
     db: Session, team_id: int, season: Optional[str] = None
 ) -> List[Game]:
@@ -133,6 +179,54 @@ def calculate_team_season_stats(
     ts_percentage = calculate_true_shooting_percentage(total_points, total_fga, total_fta)
     efg_percentage = calculate_effective_field_goal_percentage(total_fgm, total_fg3m, total_fga)
     
+    # Calculate opponent stats for defensive rating
+    opponent_points = 0
+    opponent_fga = 0
+    opponent_fta = 0
+    opponent_tov = 0
+    
+    for game in games:
+        is_home = game.home_team_id == team_id
+        opponent_id = game.away_team_id if is_home else game.home_team_id
+        
+        # Get opponent box scores for this game
+        opponent_box_scores = db.query(BoxScore).join(Player).filter(
+            BoxScore.game_id == game.id,
+            Player.team_id == opponent_id
+        ).all()
+        
+        for bs in opponent_box_scores:
+            opponent_points += bs.points or 0
+            opponent_fga += bs.field_goals_attempted or 0
+            opponent_fta += bs.free_throws_attempted or 0
+            opponent_tov += bs.turnovers or 0
+    
+    # Calculate advanced metrics
+    # Pace (possessions per game)
+    total_possessions = calculate_possessions(total_fga, total_fta, total_turnovers)
+    pace = safe_divide(total_possessions, games_played) if games_played > 0 else None
+    
+    # Offensive Rating
+    offensive_rating = calculate_offensive_rating(total_points, total_possessions)
+    
+    # Defensive Rating
+    opponent_possessions = calculate_possessions(opponent_fga, opponent_fta, opponent_tov)
+    defensive_rating = calculate_defensive_rating(opponent_points, opponent_possessions)
+    
+    # Net Rating
+    net_rating = None
+    if offensive_rating is not None and defensive_rating is not None:
+        net_rating = offensive_rating - defensive_rating
+    
+    # Four Factors
+    # 1. eFG% (already calculated)
+    # 2. TOV% (Turnover Percentage)
+    tov_percentage = calculate_turnover_percentage(total_turnovers, total_fga, total_fta)
+    
+    # 3. ORB% (Offensive Rebound Percentage) - Note: We don't have ORB data, so we'll skip this
+    # 4. FTA Rate (Free Throw Attempt Rate)
+    fta_rate = calculate_fta_rate(total_fta, total_fga)
+    
     return {
         "season": season,
         "games_played": games_played,
@@ -183,6 +277,18 @@ def calculate_team_season_stats(
             "free_throw_percentage": round(ft_percentage, 1) if ft_percentage is not None else None,
             "effective_field_goal_percentage": round(efg_percentage, 1) if efg_percentage is not None else None,
             "true_shooting_percentage": round(ts_percentage, 1) if ts_percentage is not None else None,
+        },
+        "advanced_metrics": {
+            "pace": round(pace, 1) if pace is not None else None,
+            "offensive_rating": round(offensive_rating, 1) if offensive_rating is not None else None,
+            "defensive_rating": round(defensive_rating, 1) if defensive_rating is not None else None,
+            "net_rating": round(net_rating, 1) if net_rating is not None else None,
+        },
+        "four_factors": {
+            "effective_field_goal_percentage": round(efg_percentage, 1) if efg_percentage is not None else None,
+            "turnover_percentage": round(tov_percentage, 1) if tov_percentage is not None else None,
+            "free_throw_attempt_rate": round(fta_rate, 1) if fta_rate is not None else None,
+            # Note: Offensive rebound percentage requires ORB data which we don't have
         }
     }
 

@@ -97,6 +97,191 @@ def calculate_player_efficiency_rating(
     return per
 
 
+def calculate_box_plus_minus(
+    points: int, fgm: int, fga: int, ftm: int, fta: int,
+    rebounds: int, assists: int, steals: int, blocks: int,
+    turnovers: int, personal_fouls: int, minutes: float,
+    team_points: int, team_minutes: float
+) -> Optional[float]:
+    """Calculate Box Plus/Minus (BPM).
+    
+    BPM estimates a player's contribution per 100 possessions relative to league average.
+    Simplified version based on box score stats.
+    
+    Formula (simplified):
+    BPM = Raw BPM - Position Adjustment - League Average
+    
+    Raw BPM components:
+    - Points: +0.5 per point
+    - Shooting efficiency: Based on TS%
+    - Rebounds: +0.25 per rebound
+    - Assists: +0.5 per assist
+    - Steals: +1.5 per steal
+    - Blocks: +0.5 per block
+    - Turnovers: -1.0 per turnover
+    - Fouls: -0.25 per foul
+    
+    Adjusted per 100 possessions.
+    """
+    if minutes == 0 or minutes is None:
+        return None
+    
+    # Calculate possessions (simplified)
+    possessions = fga + 0.44 * fta + turnovers
+    if possessions == 0:
+        return None
+    
+    # Calculate raw BPM components
+    raw_bpm = (
+        (points * 0.5) +
+        (rebounds * 0.25) +
+        (assists * 0.5) +
+        (steals * 1.5) +
+        (blocks * 0.5) -
+        (turnovers * 1.0) -
+        (personal_fouls * 0.25)
+    )
+    
+    # Adjust for shooting efficiency (TS%)
+    ts_percentage = calculate_true_shooting_percentage(points, fga, fta)
+    if ts_percentage is not None:
+        # League average TS% is typically around 55-57%
+        league_avg_ts = 56.0
+        ts_adjustment = (ts_percentage - league_avg_ts) * 0.1
+        raw_bpm += ts_adjustment
+    
+    # Convert to per 100 possessions
+    bpm_per_100 = (raw_bpm / possessions) * 100
+    
+    # League average BPM is typically around 0.0
+    # Position and league adjustments would go here, but simplified for now
+    bpm = bpm_per_100 - 0.0  # League average adjustment
+    
+    return bpm
+
+
+def calculate_vorp(
+    bpm: float, minutes: float, games_played: int, league_avg_minutes: float = 36.0
+) -> Optional[float]:
+    """Calculate Value Over Replacement Player (VORP).
+    
+    VORP = (BPM - (-2.0)) * (Minutes / League Average Minutes) * (Games / 82)
+    
+    Where -2.0 is the replacement level BPM.
+    """
+    if minutes == 0 or minutes is None or bpm is None:
+        return None
+    
+    replacement_level = -2.0
+    bpm_above_replacement = bpm - replacement_level
+    
+    # Adjust for minutes and games
+    minutes_factor = minutes / league_avg_minutes if league_avg_minutes > 0 else 1.0
+    games_factor = games_played / 82.0 if games_played > 0 else 1.0
+    
+    vorp = bpm_above_replacement * minutes_factor * games_factor
+    
+    return vorp
+
+
+def calculate_win_shares(
+    points: int, rebounds: int, assists: int, steals: int, blocks: int,
+    turnovers: int, fga: int, fgm: int, fta: int, ftm: int,
+    team_wins: int, team_points: int, minutes: float, team_minutes: float
+) -> Optional[float]:
+    """Calculate Win Shares (simplified version).
+    
+    Win Shares estimates the number of wins a player contributes.
+    
+    Simplified formula:
+    Offensive Win Shares = (Player Points / Team Points) * Team Wins * (Player Minutes / Team Minutes)
+    Defensive Win Shares = Based on defensive stats (simplified)
+    Total Win Shares = Offensive WS + Defensive WS
+    
+    This is a simplified calculation - full Win Shares requires more complex formulas.
+    """
+    if team_points == 0 or team_minutes == 0 or minutes == 0:
+        return None
+    
+    # Offensive Win Shares (simplified)
+    points_contribution = safe_divide(points, team_points, 0)
+    minutes_contribution = safe_divide(minutes, team_minutes, 0)
+    offensive_ws = points_contribution * team_wins * minutes_contribution
+    
+    # Defensive Win Shares (simplified based on defensive stats)
+    # Weight defensive stats: steals, blocks, defensive rebounds (using total rebounds as proxy)
+    defensive_stats = (steals * 1.5) + (blocks * 1.0) + (rebounds * 0.5) - (turnovers * 0.5)
+    # Normalize by minutes
+    defensive_rate = safe_divide(defensive_stats, minutes, 0) if minutes > 0 else 0
+    
+    # Estimate defensive contribution (simplified)
+    # Assume average team has similar defensive rate
+    defensive_ws = defensive_rate * team_wins * minutes_contribution * 0.3  # Weight defensive contribution
+    
+    total_win_shares = offensive_ws + defensive_ws
+    
+    return total_win_shares
+
+
+def calculate_clutch_stats(
+    db: Session, player_id: int, season: Optional[str] = None
+) -> Dict:
+    """Calculate clutch performance stats.
+    
+    Clutch situations: Games within 5 points in the last 5 minutes.
+    For simplicity, we'll use games decided by 5 points or less as "clutch" games.
+    """
+    # Get all games for the player
+    box_scores = get_player_box_scores(db, player_id, season=season)
+    
+    if not box_scores:
+        return {
+            "error": f"No games found for player {player_id}"
+        }
+    
+    clutch_box_scores = []
+    
+    for bs in box_scores:
+        game = db.query(Game).filter(Game.id == bs.game_id).first()
+        if not game or game.home_score is None or game.away_score is None:
+            continue
+        
+        # Determine if game was close (decided by 5 points or less)
+        score_diff = abs(game.home_score - game.away_score)
+        if score_diff <= 5:
+            clutch_box_scores.append(bs)
+    
+    if not clutch_box_scores:
+        return {
+            "clutch_games": 0,
+            "clutch_points_per_game": 0,
+            "clutch_rebounds_per_game": 0,
+            "clutch_assists_per_game": 0,
+            "clutch_fg_percentage": None,
+            "clutch_plus_minus_per_game": 0
+        }
+    
+    # Aggregate clutch stats
+    clutch_games = len(clutch_box_scores)
+    clutch_points = sum(bs.points or 0 for bs in clutch_box_scores)
+    clutch_rebounds = sum(bs.rebounds or 0 for bs in clutch_box_scores)
+    clutch_assists = sum(bs.assists or 0 for bs in clutch_box_scores)
+    clutch_fgm = sum(bs.field_goals_made or 0 for bs in clutch_box_scores)
+    clutch_fga = sum(bs.field_goals_attempted or 0 for bs in clutch_box_scores)
+    clutch_plus_minus = sum(bs.plus_minus or 0 for bs in clutch_box_scores)
+    
+    clutch_fg_percentage = safe_divide(clutch_fgm, clutch_fga) * 100 if clutch_fga > 0 else None
+    
+    return {
+        "clutch_games": clutch_games,
+        "clutch_points_per_game": round(safe_divide(clutch_points, clutch_games), 1),
+        "clutch_rebounds_per_game": round(safe_divide(clutch_rebounds, clutch_games), 1),
+        "clutch_assists_per_game": round(safe_divide(clutch_assists, clutch_games), 1),
+        "clutch_fg_percentage": round(clutch_fg_percentage, 1) if clutch_fg_percentage is not None else None,
+        "clutch_plus_minus_per_game": round(safe_divide(clutch_plus_minus, clutch_games), 1)
+    }
+
+
 def get_player_box_scores(
     db: Session, player_id: int, season: Optional[str] = None, limit: Optional[int] = None
 ) -> List[BoxScore]:
@@ -177,6 +362,47 @@ def calculate_season_features(
         0, 0, 0, 0  # Team stats not available
     )
     
+    # Get player's team for advanced metrics
+    player = db.query(Player).filter(Player.id == player_id).first()
+    team_id = player.team_id if player else None
+    
+    # Calculate BPM, VORP, Win Shares if team data is available
+    bpm = None
+    vorp = None
+    win_shares = None
+    
+    if team_id:
+        # Get team stats for the season
+        from app.analytics.team_features import calculate_team_season_stats, get_team_box_scores
+        
+        team_stats = calculate_team_season_stats(db, team_id, season)
+        if "error" not in team_stats:
+            team_points = team_stats.get("totals", {}).get("points", 0)
+            team_minutes = team_stats.get("totals", {}).get("minutes", 0)
+            team_wins = team_stats.get("record", {}).get("wins", 0)
+            
+            # Calculate BPM
+            bpm = calculate_box_plus_minus(
+                total_points, total_fgm, total_fga, total_ftm, total_fta,
+                total_rebounds, total_assists, total_steals, total_blocks,
+                total_turnovers, total_personal_fouls, total_minutes,
+                team_points, team_minutes
+            )
+            
+            # Calculate VORP
+            if bpm is not None:
+                vorp = calculate_vorp(bpm, total_minutes, games_played)
+            
+            # Calculate Win Shares
+            win_shares = calculate_win_shares(
+                total_points, total_rebounds, total_assists, total_steals, total_blocks,
+                total_turnovers, total_fga, total_fgm, total_fta, total_ftm,
+                team_wins, team_points, total_minutes, team_minutes
+            )
+    
+    # Calculate clutch stats
+    clutch_stats = calculate_clutch_stats(db, player_id, season=season)
+    
     return {
         "season": season,
         "games_played": games_played,
@@ -218,7 +444,11 @@ def calculate_season_features(
         "advanced_stats": {
             "player_efficiency_rating": round(per, 2) if per is not None else None,
             "usage_rate": round(usage_rate, 1) if usage_rate is not None else None,
-        }
+            "box_plus_minus": round(bpm, 2) if bpm is not None else None,
+            "value_over_replacement_player": round(vorp, 2) if vorp is not None else None,
+            "win_shares": round(win_shares, 2) if win_shares is not None else None,
+        },
+        "clutch_stats": clutch_stats if "error" not in clutch_stats else {}
     }
 
 

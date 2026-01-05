@@ -129,38 +129,128 @@ export default function PlayersView() {
         </div>
         <div className={`status-bar ${featuresStatusKind}`}>{featuresStatus}</div>
         {features && (
-          <div className="split-columns" style={{ marginTop: "1rem" }}>
-            <div>
-              <h3>Overview</h3>
-              <pre className="code-block small">
-                {pretty({
-                  player: features.player_name,
-                  season: features.season || "Career",
-                  games_played: features.games_played,
-                })}
-              </pre>
-              {features.per_game && (
-                <>
-                  <h3 style={{ marginTop: "1rem" }}>Per Game</h3>
-                  <pre className="code-block small">{pretty(features.per_game)}</pre>
-                </>
-              )}
+          <>
+            <div className="split-columns" style={{ marginTop: "1rem" }}>
+              <div>
+                <h3>Overview</h3>
+                <pre className="code-block small">
+                  {pretty({
+                    player: features.player_name,
+                    season: features.season || "Career",
+                    games_played: features.games_played,
+                  })}
+                </pre>
+                {features.per_game && (
+                  <>
+                    <h3 style={{ marginTop: "1rem" }}>Per Game</h3>
+                    <pre className="code-block small">{pretty(features.per_game)}</pre>
+                  </>
+                )}
+              </div>
+              <div>
+                {features.shooting_percentages && (
+                  <>
+                    <h3>Shooting %</h3>
+                    <pre className="code-block small">{pretty(features.shooting_percentages)}</pre>
+                  </>
+                )}
+                {features.advanced_stats && (
+                  <>
+                    <h3 style={{ marginTop: "1rem" }}>Advanced Stats</h3>
+                    <div className="table-container" style={{ marginTop: "0.5rem" }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Metric</th>
+                            <th>Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td><strong>PER</strong> (Player Efficiency Rating)</td>
+                            <td>{features.advanced_stats.player_efficiency_rating?.toFixed(2) || "-"}</td>
+                          </tr>
+                          <tr>
+                            <td><strong>Usage Rate</strong></td>
+                            <td>{features.advanced_stats.usage_rate?.toFixed(1) || "-"}%</td>
+                          </tr>
+                          {features.advanced_stats.box_plus_minus != null && (
+                            <tr>
+                              <td><strong>BPM</strong> (Box Plus/Minus)</td>
+                              <td>{features.advanced_stats.box_plus_minus > 0 ? "+" : ""}{features.advanced_stats.box_plus_minus.toFixed(2)}</td>
+                            </tr>
+                          )}
+                          {features.advanced_stats.value_over_replacement_player != null && (
+                            <tr>
+                              <td><strong>VORP</strong> (Value Over Replacement)</td>
+                              <td>{features.advanced_stats.value_over_replacement_player.toFixed(2)}</td>
+                            </tr>
+                          )}
+                          {features.advanced_stats.win_shares != null && (
+                            <tr>
+                              <td><strong>Win Shares</strong></td>
+                              <td>{features.advanced_stats.win_shares.toFixed(2)}</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
-            <div>
-              {features.shooting_percentages && (
-                <>
-                  <h3>Shooting %</h3>
-                  <pre className="code-block small">{pretty(features.shooting_percentages)}</pre>
-                </>
-              )}
-              {features.advanced_stats && (
-                <>
-                  <h3 style={{ marginTop: "1rem" }}>Advanced Stats</h3>
-                  <pre className="code-block small">{pretty(features.advanced_stats)}</pre>
-                </>
-              )}
-            </div>
-          </div>
+            
+            {/* Clutch Stats */}
+            {features.clutch_stats && Object.keys(features.clutch_stats).length > 0 && !features.clutch_stats.error && (
+              <div style={{ marginTop: "1.5rem" }}>
+                <h3>Clutch Performance</h3>
+                <p className="hint" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+                  Stats in close games (decided by 5 points or less)
+                </p>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><strong>Clutch Games</strong></td>
+                        <td>{features.clutch_stats.clutch_games || 0}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Clutch PPG</strong></td>
+                        <td>{features.clutch_stats.clutch_points_per_game?.toFixed(1) || "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Clutch RPG</strong></td>
+                        <td>{features.clutch_stats.clutch_rebounds_per_game?.toFixed(1) || "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Clutch APG</strong></td>
+                        <td>{features.clutch_stats.clutch_assists_per_game?.toFixed(1) || "-"}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Clutch FG%</strong></td>
+                        <td>{features.clutch_stats.clutch_fg_percentage?.toFixed(1) || "-"}%</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Clutch +/-</strong></td>
+                        <td style={{ 
+                          color: features.clutch_stats.clutch_plus_minus_per_game > 0 ? "#86efac" : features.clutch_stats.clutch_plus_minus_per_game < 0 ? "#fca5a5" : "#e5e7eb",
+                          fontWeight: 600
+                        }}>
+                          {features.clutch_stats.clutch_plus_minus_per_game > 0 ? "+" : ""}{features.clutch_stats.clutch_plus_minus_per_game?.toFixed(1) || "-"}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </section>

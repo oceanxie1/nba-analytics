@@ -181,6 +181,8 @@ class TeamStats(BaseModel):
     totals: Dict
     per_game: Dict
     shooting_percentages: Dict
+    advanced_metrics: Optional[Dict] = None
+    four_factors: Optional[Dict] = None
 
     class Config:
         orm_mode = True
