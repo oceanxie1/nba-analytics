@@ -136,23 +136,46 @@ def calculate_team_season_stats(
     games_played = wins + losses
     win_percentage = safe_divide(wins, games_played) * 100 if games_played > 0 else 0
     
-    # Aggregate team totals from box scores
-    total_minutes = sum(bs.minutes or 0 for bs in box_scores)
-    total_points = sum(bs.points or 0 for bs in box_scores)
-    total_rebounds = sum(bs.rebounds or 0 for bs in box_scores)
-    total_assists = sum(bs.assists or 0 for bs in box_scores)
-    total_steals = sum(bs.steals or 0 for bs in box_scores)
-    total_blocks = sum(bs.blocks or 0 for bs in box_scores)
-    total_turnovers = sum(bs.turnovers or 0 for bs in box_scores)
-    total_personal_fouls = sum(bs.personal_fouls or 0 for bs in box_scores)
+    # Aggregate team totals from box scores using database aggregation (optimized)
+    from sqlalchemy import func
     
-    total_fgm = sum(bs.field_goals_made or 0 for bs in box_scores)
-    total_fga = sum(bs.field_goals_attempted or 0 for bs in box_scores)
-    total_fg3m = sum(bs.three_pointers_made or 0 for bs in box_scores)
-    total_fg3a = sum(bs.three_pointers_attempted or 0 for bs in box_scores)
-    total_ftm = sum(bs.free_throws_made or 0 for bs in box_scores)
-    total_fta = sum(bs.free_throws_attempted or 0 for bs in box_scores)
-    total_plus_minus = sum(bs.plus_minus or 0 for bs in box_scores)
+    agg_query = db.query(
+        func.sum(func.coalesce(BoxScore.minutes, 0)).label('total_minutes'),
+        func.sum(func.coalesce(BoxScore.points, 0)).label('total_points'),
+        func.sum(func.coalesce(BoxScore.rebounds, 0)).label('total_rebounds'),
+        func.sum(func.coalesce(BoxScore.assists, 0)).label('total_assists'),
+        func.sum(func.coalesce(BoxScore.steals, 0)).label('total_steals'),
+        func.sum(func.coalesce(BoxScore.blocks, 0)).label('total_blocks'),
+        func.sum(func.coalesce(BoxScore.turnovers, 0)).label('total_turnovers'),
+        func.sum(func.coalesce(BoxScore.personal_fouls, 0)).label('total_personal_fouls'),
+        func.sum(func.coalesce(BoxScore.field_goals_made, 0)).label('total_fgm'),
+        func.sum(func.coalesce(BoxScore.field_goals_attempted, 0)).label('total_fga'),
+        func.sum(func.coalesce(BoxScore.three_pointers_made, 0)).label('total_fg3m'),
+        func.sum(func.coalesce(BoxScore.three_pointers_attempted, 0)).label('total_fg3a'),
+        func.sum(func.coalesce(BoxScore.free_throws_made, 0)).label('total_ftm'),
+        func.sum(func.coalesce(BoxScore.free_throws_attempted, 0)).label('total_fta'),
+        func.sum(func.coalesce(BoxScore.plus_minus, 0)).label('total_plus_minus'),
+    ).join(Player).join(Game).filter(
+        Player.team_id == team_id,
+        Game.season == season
+    ).first()
+    
+    # Extract aggregated values
+    total_minutes = float(agg_query.total_minutes or 0)
+    total_points = int(agg_query.total_points or 0)
+    total_rebounds = int(agg_query.total_rebounds or 0)
+    total_assists = int(agg_query.total_assists or 0)
+    total_steals = int(agg_query.total_steals or 0)
+    total_blocks = int(agg_query.total_blocks or 0)
+    total_turnovers = int(agg_query.total_turnovers or 0)
+    total_personal_fouls = int(agg_query.total_personal_fouls or 0)
+    total_fgm = int(agg_query.total_fgm or 0)
+    total_fga = int(agg_query.total_fga or 0)
+    total_fg3m = int(agg_query.total_fg3m or 0)
+    total_fg3a = int(agg_query.total_fg3a or 0)
+    total_ftm = int(agg_query.total_ftm or 0)
+    total_fta = int(agg_query.total_fta or 0)
+    total_plus_minus = int(agg_query.total_plus_minus or 0)
     
     # Per-game averages
     minutes_per_game = safe_divide(total_minutes, games_played)
@@ -179,27 +202,22 @@ def calculate_team_season_stats(
     ts_percentage = calculate_true_shooting_percentage(total_points, total_fga, total_fta)
     efg_percentage = calculate_effective_field_goal_percentage(total_fgm, total_fg3m, total_fga)
     
-    # Calculate opponent stats for defensive rating
-    opponent_points = 0
-    opponent_fga = 0
-    opponent_fta = 0
-    opponent_tov = 0
+    # Calculate opponent stats for defensive rating (optimized with aggregation)
+    opponent_agg_query = db.query(
+        func.sum(func.coalesce(BoxScore.points, 0)).label('opponent_points'),
+        func.sum(func.coalesce(BoxScore.field_goals_attempted, 0)).label('opponent_fga'),
+        func.sum(func.coalesce(BoxScore.free_throws_attempted, 0)).label('opponent_fta'),
+        func.sum(func.coalesce(BoxScore.turnovers, 0)).label('opponent_tov'),
+    ).join(Player).join(Game).filter(
+        Game.season == season,
+        Game.id.in_([g.id for g in games]),
+        Player.team_id != team_id
+    ).first()
     
-    for game in games:
-        is_home = game.home_team_id == team_id
-        opponent_id = game.away_team_id if is_home else game.home_team_id
-        
-        # Get opponent box scores for this game
-        opponent_box_scores = db.query(BoxScore).join(Player).filter(
-            BoxScore.game_id == game.id,
-            Player.team_id == opponent_id
-        ).all()
-        
-        for bs in opponent_box_scores:
-            opponent_points += bs.points or 0
-            opponent_fga += bs.field_goals_attempted or 0
-            opponent_fta += bs.free_throws_attempted or 0
-            opponent_tov += bs.turnovers or 0
+    opponent_points = int(opponent_agg_query.opponent_points or 0)
+    opponent_fga = int(opponent_agg_query.opponent_fga or 0)
+    opponent_fta = int(opponent_agg_query.opponent_fta or 0)
+    opponent_tov = int(opponent_agg_query.opponent_tov or 0)
     
     # Calculate advanced metrics
     # Pace (possessions per game)

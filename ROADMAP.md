@@ -123,9 +123,9 @@
 - [ ] Cache team standings
 
 #### 5.2 Query Optimization
-- [ ] Add database indexes for common queries
-- [ ] Optimize aggregation queries
-- [ ] Add pagination to all list endpoints
+- [x] Add database indexes for common queries
+- [x] Optimize aggregation queries
+- [x] Add pagination to all list endpoints
 
 #### 5.3 Background Jobs
 - [ ] Set up Celery for async tasks

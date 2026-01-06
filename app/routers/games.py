@@ -1,13 +1,44 @@
 """Game and box score related API endpoints."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app.db import get_db
 from app.models import Game, BoxScore
 from app.schemas import Game as GameSchema, GameCreate, BoxScore as BoxScoreSchema, BoxScoreCreate
 from app.analytics.team_features import calculate_game_team_stats
 
 router = APIRouter(prefix="/games", tags=["games"])
+
+
+@router.get("/", response_model=List[GameSchema])
+def list_games(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
+    season: Optional[str] = Query(None, description="Filter by season (e.g., '2023-24')"),
+    team_id: Optional[int] = Query(None, description="Filter by team ID (home or away)"),
+    db: Session = Depends(get_db)
+):
+    """List all games with optional filtering and pagination."""
+    from sqlalchemy import or_
+    
+    query = db.query(Game)
+    
+    if season:
+        query = query.filter(Game.season == season)
+    
+    if team_id:
+        query = query.filter(
+            or_(
+                Game.home_team_id == team_id,
+                Game.away_team_id == team_id
+            )
+        )
+    
+    # Order by most recent first
+    query = query.order_by(Game.game_date.desc())
+    
+    games = query.offset(skip).limit(limit).all()
+    return games
 
 
 @router.post("/", response_model=GameSchema, status_code=201)
@@ -49,11 +80,18 @@ def get_box_score(box_score_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{game_id}/box-scores", response_model=List[BoxScoreSchema])
-def get_box_scores_for_game(game_id: int, db: Session = Depends(get_db)):
-    """Get all box scores for a specific game."""
+def get_box_scores_for_game(
+    game_id: int,
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
+    db: Session = Depends(get_db)
+):
+    """Get all box scores for a specific game with pagination."""
     # We intentionally return an empty list (200) if there are no box scores yet
     # instead of a 404, so clients can distinguish "no data" from "bad route".
-    box_scores = db.query(BoxScore).filter(BoxScore.game_id == game_id).all()
+    box_scores = db.query(BoxScore).filter(
+        BoxScore.game_id == game_id
+    ).offset(skip).limit(limit).all()
     return box_scores
 
 

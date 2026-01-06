@@ -13,8 +13,12 @@ router = APIRouter(prefix="/teams", tags=["teams"])
 
 
 @router.get("/", response_model=List[TeamSchema])
-def list_teams(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """List all teams."""
+def list_teams(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
+    db: Session = Depends(get_db)
+):
+    """List all teams with pagination."""
     teams = db.query(Team).offset(skip).limit(limit).all()
     return teams
 
