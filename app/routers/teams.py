@@ -6,6 +6,8 @@ from app.db import get_db
 from app.models import Team, Game
 from app.schemas import Team as TeamSchema, TeamCreate, Game as GameSchema, TeamComparison
 from app.analytics.team_features import calculate_team_season_stats, calculate_game_team_stats, compare_teams
+from app.cache import cache_manager, cache_key_team_stats, cache_key_team_comparison, cache_stats
+import time
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -55,11 +57,31 @@ def compare_teams_endpoint(
             detail="Maximum 10 teams can be compared at once"
         )
     
+    # Check cache first
+    cache_key = cache_key_team_comparison(team_id_list, season)
+    cache_lookup_start = time.time()
+    cached_result = cache_manager.get(cache_key)
+    cache_lookup_time = time.time() - cache_lookup_start
+    
+    if cached_result is not None:
+        cache_stats.record_hit(cache_lookup_time)
+        return cached_result
+    
+    # Cache miss - need to query database
+    db_query_start = time.time()
+    
     # Get comparison data
     comparison_result = compare_teams(db, team_id_list, season)
     
     if "error" in comparison_result:
         raise HTTPException(status_code=404, detail=comparison_result["error"])
+    
+    # Cache the result (1 hour TTL)
+    cache_manager.set(cache_key, comparison_result, ttl=3600)
+    
+    # Record cache miss response time
+    db_query_time = time.time() - db_query_start
+    cache_stats.record_miss(db_query_time)
     
     return comparison_result
 
@@ -95,8 +117,25 @@ def get_team_season_stats(
     - Win/loss record (overall, home, away)
     - Per-game averages (points, rebounds, assists, etc.)
     - Shooting percentages (FG%, 3P%, FT%, eFG%, TS%)
+    - Advanced metrics (Pace, Offensive/Defensive Rating, Net Rating)
+    - Four Factors (eFG%, TOV%, FTA Rate)
     - Totals for the season
+    
+    Results are cached for 1 hour to improve performance.
     """
+    # Check cache first
+    cache_key = cache_key_team_stats(team_id, season)
+    cache_lookup_start = time.time()
+    cached_result = cache_manager.get(cache_key)
+    cache_lookup_time = time.time() - cache_lookup_start
+    
+    if cached_result is not None:
+        cache_stats.record_hit(cache_lookup_time)
+        return cached_result
+    
+    # Cache miss - need to query database
+    db_query_start = time.time()
+    
     # Verify team exists
     team = db.query(Team).filter(Team.id == team_id).first()
     if not team:
@@ -107,11 +146,20 @@ def get_team_season_stats(
     if "error" in stats:
         raise HTTPException(status_code=404, detail=stats["error"])
     
-    return {
+    result = {
         "team_id": team_id,
         "team_name": team.name,
         **stats
     }
+    
+    # Cache the result (1 hour TTL)
+    cache_manager.set(cache_key, result, ttl=3600)
+    
+    # Record cache miss response time
+    db_query_time = time.time() - db_query_start
+    cache_stats.record_miss(db_query_time)
+    
+    return result
 
 
 @router.get("/{team_id}/games", response_model=List[GameSchema])

@@ -10,6 +10,8 @@ from app.analytics.features import (
     calculate_season_features, calculate_career_features, calculate_rolling_averages, compare_players,
     calculate_performance_vs_team, calculate_performance_by_game_situation, calculate_performance_by_period
 )
+from app.cache import cache_manager, cache_key_player_features, cache_key_player_comparison, cache_stats
+import time
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -69,11 +71,31 @@ def compare_players_endpoint(
             detail="Maximum 10 players can be compared at once"
         )
     
+    # Check cache first
+    cache_key = cache_key_player_comparison(player_id_list, season)
+    cache_lookup_start = time.time()
+    cached_result = cache_manager.get(cache_key)
+    cache_lookup_time = time.time() - cache_lookup_start
+    
+    if cached_result is not None:
+        cache_stats.record_hit(cache_lookup_time)
+        return cached_result
+    
+    # Cache miss - need to query database
+    db_query_start = time.time()
+    
     # Get comparison data
     comparison_result = compare_players(db, player_id_list, season)
     
     if "error" in comparison_result:
         raise HTTPException(status_code=404, detail=comparison_result["error"])
+    
+    # Cache the result (1 hour TTL)
+    cache_manager.set(cache_key, comparison_result, ttl=3600)
+    
+    # Record cache miss response time
+    db_query_time = time.time() - db_query_start
+    cache_stats.record_miss(db_query_time)
     
     return comparison_result
 
@@ -167,9 +189,26 @@ def get_player_features(
     Returns advanced stats including:
     - Per-game averages
     - Shooting percentages (FG%, 3P%, FT%, eFG%, TS%)
-    - Advanced metrics (PER, Usage Rate)
+    - Advanced metrics (PER, Usage Rate, BPM, VORP, Win Shares)
+    - Clutch stats
     - Totals and per-game stats
+    
+    Results are cached for 1 hour to improve performance.
     """
+    # Check cache first
+    cache_key = cache_key_player_features(player_id, season)
+    cache_lookup_start = time.time()
+    cached_result = cache_manager.get(cache_key)
+    cache_lookup_time = time.time() - cache_lookup_start
+    
+    if cached_result is not None:
+        # Cache hit - very fast (just Redis lookup + JSON parse)
+        cache_stats.record_hit(cache_lookup_time)
+        return cached_result
+    
+    # Cache miss - need to query database and calculate
+    db_query_start = time.time()
+    
     # Verify player exists
     player = db.query(Player).filter(Player.id == player_id).first()
     if not player:
@@ -181,7 +220,7 @@ def get_player_features(
         if "error" in features:
             raise HTTPException(status_code=404, detail=features["error"])
         
-        return {
+        result = {
             "player_id": player_id,
             "player_name": player.name,
             "season": season,
@@ -193,12 +232,28 @@ def get_player_features(
         if "error" in features:
             raise HTTPException(status_code=404, detail=features["error"])
         
-        return {
+        result = {
             "player_id": player_id,
             "player_name": player.name,
             "type": "career",
             **features
         }
+    
+    # Cache the result (1 hour TTL)
+    cache_set_start = time.time()
+    cache_success = cache_manager.set(cache_key, result, ttl=3600)
+    cache_set_time = time.time() - cache_set_start
+    if not cache_success and cache_manager.enabled:
+        # Log warning if cache failed but should be enabled
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to cache result for key: {cache_key}")
+    
+    # Record cache miss response time (DB query + calculation time, excluding cache set)
+    db_query_time = time.time() - db_query_start
+    cache_stats.record_miss(db_query_time)
+    
+    return result
 
 
 @router.get("/{player_id}/rolling-averages")
