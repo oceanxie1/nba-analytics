@@ -282,6 +282,190 @@ def calculate_clutch_stats(
     }
 
 
+def calculate_performance_vs_team(
+    db: Session, player_id: int, opponent_team_id: int, season: Optional[str] = None
+) -> Dict:
+    """Calculate player performance against a specific team."""
+    # Get all games for the player
+    box_scores = get_player_box_scores(db, player_id, season=season)
+    
+    if not box_scores:
+        return {
+            "error": f"No games found for player {player_id}"
+        }
+    
+    # Filter games against the specific team
+    vs_team_box_scores = []
+    
+    for bs in box_scores:
+        game = db.query(Game).filter(Game.id == bs.game_id).first()
+        if not game:
+            continue
+        
+        # Check if opponent is the target team
+        player_team_id = db.query(Player).filter(Player.id == player_id).first()
+        if not player_team_id:
+            continue
+        
+        player_team_id = player_team_id.team_id
+        is_home = game.home_team_id == player_team_id
+        opponent_id = game.away_team_id if is_home else game.home_team_id
+        
+        if opponent_id == opponent_team_id:
+            vs_team_box_scores.append(bs)
+    
+    if not vs_team_box_scores:
+        return {
+            "games_played": 0,
+            "points_per_game": 0,
+            "rebounds_per_game": 0,
+            "assists_per_game": 0,
+            "fg_percentage": None,
+            "plus_minus_per_game": 0
+        }
+    
+    # Aggregate stats
+    games_played = len(vs_team_box_scores)
+    total_points = sum(bs.points or 0 for bs in vs_team_box_scores)
+    total_rebounds = sum(bs.rebounds or 0 for bs in vs_team_box_scores)
+    total_assists = sum(bs.assists or 0 for bs in vs_team_box_scores)
+    total_fgm = sum(bs.field_goals_made or 0 for bs in vs_team_box_scores)
+    total_fga = sum(bs.field_goals_attempted or 0 for bs in vs_team_box_scores)
+    total_plus_minus = sum(bs.plus_minus or 0 for bs in vs_team_box_scores)
+    
+    fg_percentage = safe_divide(total_fgm, total_fga) * 100 if total_fga > 0 else None
+    
+    return {
+        "games_played": games_played,
+        "points_per_game": round(safe_divide(total_points, games_played), 1),
+        "rebounds_per_game": round(safe_divide(total_rebounds, games_played), 1),
+        "assists_per_game": round(safe_divide(total_assists, games_played), 1),
+        "fg_percentage": round(fg_percentage, 1) if fg_percentage is not None else None,
+        "plus_minus_per_game": round(safe_divide(total_plus_minus, games_played), 1)
+    }
+
+
+def calculate_performance_by_game_situation(
+    db: Session, player_id: int, season: Optional[str] = None
+) -> Dict:
+    """Calculate performance in different game situations (close games vs blowouts)."""
+    # Get all games for the player
+    box_scores = get_player_box_scores(db, player_id, season=season)
+    
+    if not box_scores:
+        return {
+            "error": f"No games found for player {player_id}"
+        }
+    
+    close_games = []  # Decided by 5 points or less
+    blowout_games = []  # Decided by 20 points or more
+    
+    for bs in box_scores:
+        game = db.query(Game).filter(Game.id == bs.game_id).first()
+        if not game or game.home_score is None or game.away_score is None:
+            continue
+        
+        score_diff = abs(game.home_score - game.away_score)
+        
+        if score_diff <= 5:
+            close_games.append(bs)
+        elif score_diff >= 20:
+            blowout_games.append(bs)
+    
+    def aggregate_stats(box_scores_list):
+        if not box_scores_list:
+            return {
+                "games": 0,
+                "points_per_game": 0,
+                "rebounds_per_game": 0,
+                "assists_per_game": 0,
+                "fg_percentage": None
+            }
+        
+        games = len(box_scores_list)
+        points = sum(bs.points or 0 for bs in box_scores_list)
+        rebounds = sum(bs.rebounds or 0 for bs in box_scores_list)
+        assists = sum(bs.assists or 0 for bs in box_scores_list)
+        fgm = sum(bs.field_goals_made or 0 for bs in box_scores_list)
+        fga = sum(bs.field_goals_attempted or 0 for bs in box_scores_list)
+        
+        fg_percentage = safe_divide(fgm, fga) * 100 if fga > 0 else None
+        
+        return {
+            "games": games,
+            "points_per_game": round(safe_divide(points, games), 1),
+            "rebounds_per_game": round(safe_divide(rebounds, games), 1),
+            "assists_per_game": round(safe_divide(assists, games), 1),
+            "fg_percentage": round(fg_percentage, 1) if fg_percentage is not None else None
+        }
+    
+    return {
+        "close_games": aggregate_stats(close_games),
+        "blowout_games": aggregate_stats(blowout_games)
+    }
+
+
+def calculate_performance_by_period(
+    db: Session, player_id: int, season: Optional[str] = None
+) -> Dict:
+    """Calculate performance by month/period of season."""
+    from datetime import datetime
+    
+    # Get all games for the player
+    box_scores = get_player_box_scores(db, player_id, season=season)
+    
+    if not box_scores:
+        return {
+            "error": f"No games found for player {player_id}"
+        }
+    
+    # Group by month
+    monthly_stats = {}
+    
+    for bs in box_scores:
+        game = db.query(Game).filter(Game.id == bs.game_id).first()
+        if not game or not game.game_date:
+            continue
+        
+        # Get month key (e.g., "2023-10" for October 2023)
+        month_key = game.game_date.strftime("%Y-%m")
+        
+        if month_key not in monthly_stats:
+            monthly_stats[month_key] = {
+                "games": [],
+                "month_name": game.game_date.strftime("%B %Y")
+            }
+        
+        monthly_stats[month_key]["games"].append(bs)
+    
+    # Calculate stats for each month
+    result = {}
+    
+    for month_key, data in monthly_stats.items():
+        games = data["games"]
+        if not games:
+            continue
+        
+        total_points = sum(bs.points or 0 for bs in games)
+        total_rebounds = sum(bs.rebounds or 0 for bs in games)
+        total_assists = sum(bs.assists or 0 for bs in games)
+        total_fgm = sum(bs.field_goals_made or 0 for bs in games)
+        total_fga = sum(bs.field_goals_attempted or 0 for bs in games)
+        
+        fg_percentage = safe_divide(total_fgm, total_fga) * 100 if total_fga > 0 else None
+        
+        result[month_key] = {
+            "month": data["month_name"],
+            "games_played": len(games),
+            "points_per_game": round(safe_divide(total_points, len(games)), 1),
+            "rebounds_per_game": round(safe_divide(total_rebounds, len(games)), 1),
+            "assists_per_game": round(safe_divide(total_assists, len(games)), 1),
+            "fg_percentage": round(fg_percentage, 1) if fg_percentage is not None else None
+        }
+    
+    return result
+
+
 def get_player_box_scores(
     db: Session, player_id: int, season: Optional[str] = None, limit: Optional[int] = None
 ) -> List[BoxScore]:

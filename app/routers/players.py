@@ -6,7 +6,10 @@ from typing import List, Optional, Dict
 from app.db import get_db
 from app.models import Player, BoxScore, Game
 from app.schemas import Player as PlayerSchema, PlayerCreate, SeasonStats, PlayerComparison
-from app.analytics.features import calculate_season_features, calculate_career_features, calculate_rolling_averages, compare_players
+from app.analytics.features import (
+    calculate_season_features, calculate_career_features, calculate_rolling_averages, compare_players,
+    calculate_performance_vs_team, calculate_performance_by_game_situation, calculate_performance_by_period
+)
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -219,5 +222,89 @@ def get_player_rolling_averages(
         "season": season,
         "window": window,
         "rolling_averages": rolling
+    }
+
+
+@router.get("/{player_id}/contextual/vs-team")
+def get_performance_vs_team(
+    player_id: int,
+    opponent_team_id: int = Query(..., description="Opponent team ID"),
+    season: Optional[str] = Query(None, description="Season filter (optional)"),
+    db: Session = Depends(get_db)
+):
+    """Get player performance against a specific team."""
+    # Verify player exists
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    # Verify team exists
+    from app.models import Team
+    team = db.query(Team).filter(Team.id == opponent_team_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    stats = calculate_performance_vs_team(db, player_id, opponent_team_id, season=season)
+    
+    if "error" in stats:
+        raise HTTPException(status_code=404, detail=stats["error"])
+    
+    return {
+        "player_id": player_id,
+        "player_name": player.name,
+        "opponent_team_id": opponent_team_id,
+        "opponent_team_name": team.name,
+        "season": season,
+        "stats": stats
+    }
+
+
+@router.get("/{player_id}/contextual/game-situation")
+def get_performance_by_game_situation(
+    player_id: int,
+    season: Optional[str] = Query(None, description="Season filter (optional)"),
+    db: Session = Depends(get_db)
+):
+    """Get player performance in different game situations (close games vs blowouts)."""
+    # Verify player exists
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    stats = calculate_performance_by_game_situation(db, player_id, season=season)
+    
+    if "error" in stats:
+        raise HTTPException(status_code=404, detail=stats["error"])
+    
+    return {
+        "player_id": player_id,
+        "player_name": player.name,
+        "season": season,
+        "game_situations": stats
+    }
+
+
+@router.get("/{player_id}/contextual/by-period")
+def get_performance_by_period(
+    player_id: int,
+    season: Optional[str] = Query(None, description="Season filter (optional)"),
+    db: Session = Depends(get_db)
+):
+    """Get player performance by month/period of season."""
+    # Verify player exists
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    stats = calculate_performance_by_period(db, player_id, season=season)
+    
+    if "error" in stats:
+        raise HTTPException(status_code=404, detail=stats["error"])
+    
+    return {
+        "player_id": player_id,
+        "player_name": player.name,
+        "season": season,
+        "monthly_performance": stats
     }
 

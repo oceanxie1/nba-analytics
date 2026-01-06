@@ -2,14 +2,19 @@
 
 ## Table of Contents
 1. [High-Level Overview](#high-level-overview)
-2. [System Components](#system-components)
-3. [Data Flow](#data-flow)
-4. [Database Schema](#database-schema)
-5. [API Architecture](#api-architecture)
-6. [Data Ingestion Pipeline](#data-ingestion-pipeline)
-7. [File Structure](#file-structure)
-8. [Technology Stack](#technology-stack)
-9. [Process Flows](#process-flows)
+2. [How the Program Works](#how-the-program-works)
+   - [Database Overview](#database-overview)
+   - [Database Ingestion Process](#database-ingestion-process)
+   - [Application Startup Flow](#application-startup-flow)
+   - [API Request Flow](#api-request-flow)
+3. [System Components](#system-components)
+4. [Data Flow](#data-flow)
+5. [Database Schema](#database-schema)
+6. [API Architecture](#api-architecture)
+7. [Data Ingestion Pipeline](#data-ingestion-pipeline)
+8. [File Structure](#file-structure)
+9. [Technology Stack](#technology-stack)
+10. [Process Flows](#process-flows)
 
 ---
 
@@ -58,11 +63,17 @@
 ### 2. **Database Layer** (`app/db.py`)
 - **Purpose**: Database connection and session management
 - **Technology**: SQLAlchemy ORM
-- **Database**: SQLite (dev)
+- **Database**: SQLite (local file-based database)
+- **Storage**: Data is persisted to `nba_analytics.db` file in the project root
 - **Key Functions**:
   - `get_db()`: Dependency injection for database sessions
-  - `init_db()`: Creates tables and indexes
+  - `init_db()`: Creates tables and indexes on startup
   - `SessionLocal`: Session factory
+- **Important Notes**:
+  - **Local Database**: SQLite is a file-based database stored locally on your machine
+  - **Data Persistence**: All data is saved to disk in `nba_analytics.db` file
+  - **No Server Required**: SQLite doesn't need a separate database server
+  - **Easy Migration**: Can be swapped to PostgreSQL by changing `DATABASE_URL` environment variable
 
 ### 3. **Data Models** (`app/models.py`)
 - **Purpose**: Database schema definition
@@ -76,8 +87,19 @@
 - **Purpose**: RESTful API endpoints
 - **Routers**:
   - `players.py`: Player endpoints
+    - List players, get player details
+    - Player features/analytics (season/career)
+    - Player comparison
+    - Contextual stats (vs teams, game situations, by period)
+    - Rolling averages
   - `teams.py`: Team endpoints
+    - List teams, get team details
+    - Team season stats
+    - Team game stats
+    - Team comparison
   - `games.py`: Game and box score endpoints
+    - List games, get game details
+    - Game summaries with box scores
 
 ### 5. **Data Ingestion** (`app/ingestion/`)
 - **Purpose**: Fetch and store NBA data
@@ -92,8 +114,15 @@
 - **Types**: Request schemas, response schemas, aggregated stats
 
 ### 7. **Analytics** (`app/analytics/`)
-- **Purpose**: Future ML/feature engineering
-- **Status**: Placeholder for future development
+- **Purpose**: Feature engineering and advanced metrics calculation
+- **Components**:
+  - `features.py`: Player analytics (PER, BPM, VORP, Win Shares, Clutch Stats, Contextual Stats)
+  - `team_features.py`: Team analytics (Pace, Offensive/Defensive Rating, Net Rating, Four Factors)
+- **Features**:
+  - Advanced player metrics (BPM, VORP, Win Shares)
+  - Advanced team metrics (Pace, ORtg, DRtg, Net Rating, Four Factors)
+  - Contextual stats (vs teams, game situations, by period)
+  - Player and team comparison functions
 
 ---
 
@@ -828,12 +857,32 @@ Processing Box Score: (game_id=500, player_id=100)
 
 ## Summary
 
-This NBA Analytics platform is a **FastAPI-based REST API** that:
-- Ingests data from the NBA API
-- Stores it in a relational database (SQLite/PostgreSQL)
-- Exposes RESTful endpoints for querying
-- Uses optimized batch processing and duplicate prevention
-- Provides automatic API documentation
+This NBA Analytics platform is a **FastAPI-based REST API** with a **React frontend** that:
 
-The architecture is **modular**, **scalable**, and **optimized for performance**, with clear separation between data ingestion, API layer, and database operations.
+### Core Functionality
+- **Data Ingestion**: Fetches data from the NBA API and stores it in a **local SQLite database**
+- **Data Persistence**: All data is saved to `nba_analytics.db` file on your local machine
+- **RESTful API**: Exposes endpoints for querying players, teams, games, and analytics
+- **Frontend**: React/Vite application for visualizing data and analytics
+
+### Database
+- **Type**: SQLite (local file-based database)
+- **Location**: `nba_analytics.db` in project root
+- **Persistence**: Data persists between application restarts
+- **No Server Required**: SQLite doesn't need a separate database server
+
+### Key Features
+- **Advanced Player Metrics**: PER, BPM, VORP, Win Shares, Clutch Stats
+- **Advanced Team Metrics**: Pace, Offensive/Defensive Rating, Net Rating, Four Factors
+- **Contextual Stats**: Performance vs teams, game situations, by period
+- **Comparisons**: Side-by-side player and team comparisons
+- **Optimized Processing**: Batch insertion and duplicate prevention
+
+### Architecture Principles
+- **Modular**: Clear separation between ingestion, API, analytics, and frontend
+- **Scalable**: Easy to swap SQLite for PostgreSQL in production
+- **Performance**: Optimized queries, batch processing, and indexes
+- **Developer-Friendly**: Automatic API documentation (Swagger), type validation
+
+The architecture is **modular**, **scalable**, and **optimized for performance**, with clear separation between data ingestion, API layer, analytics computation, and frontend presentation.
 
