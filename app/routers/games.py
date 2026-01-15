@@ -2,10 +2,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Dict, Optional
+import logging
 from app.db import get_db
 from app.models import Game, BoxScore
-from app.schemas import Game as GameSchema, GameCreate, BoxScore as BoxScoreSchema, BoxScoreCreate
+from app.schemas import (
+    Game as GameSchema, GameCreate, BoxScore as BoxScoreSchema, BoxScoreCreate,
+    GamePredictionRequest, GamePrediction
+)
 from app.analytics.team_features import calculate_game_team_stats
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/games", tags=["games"])
 
@@ -182,4 +188,79 @@ def get_game_summary(game_id: int, db: Session = Depends(get_db)):
         ],
         "box_score_count": len(box_scores)
     }
+
+
+@router.post("/predict", response_model=GamePrediction)
+def predict_game_outcome(
+    request: GamePredictionRequest,
+    db: Session = Depends(get_db)
+):
+    """Predict the outcome of a game using machine learning.
+    
+    Args:
+        request: Game prediction request with home_team_id, away_team_id, game_date, season
+        db: Database session
+    
+    Returns:
+        GamePrediction with predicted winner and probabilities
+    """
+    from app.models import Team
+    from app.ml.models import load_game_outcome_model, predict_game_outcome
+    from app.ml.data_prep import prepare_features_for_prediction
+    from datetime import date as date_class
+    
+    try:
+        # Ensure game_date is a date object (FastAPI should parse it, but double-check)
+        if isinstance(request.game_date, str):
+            from datetime import datetime
+            game_date = datetime.strptime(request.game_date, "%Y-%m-%d").date()
+        else:
+            game_date = request.game_date
+        
+        # Validate teams exist
+        home_team = db.query(Team).filter(Team.id == request.home_team_id).first()
+        away_team = db.query(Team).filter(Team.id == request.away_team_id).first()
+        
+        if not home_team:
+            raise HTTPException(status_code=404, detail=f"Home team {request.home_team_id} not found")
+        if not away_team:
+            raise HTTPException(status_code=404, detail=f"Away team {request.away_team_id} not found")
+        
+        # Load model
+        model = load_game_outcome_model()
+        if not model:
+            return GamePrediction(
+                prediction=1,
+                predicted_winner="home",
+                probability=0.5,
+                home_win_prob=0.5,
+                away_win_prob=0.5,
+                model_available=False
+            )
+        
+        # Prepare features
+        features_df = prepare_features_for_prediction(
+            db,
+            request.home_team_id,
+            request.away_team_id,
+            game_date,
+            request.season
+        )
+        
+        # Make prediction
+        result = predict_game_outcome(model, features_df)
+        result["model_available"] = True
+        return GamePrediction(**result)
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error in predict_game_outcome: {str(e)}\n{error_trace}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error making prediction: {str(e)}"
+        )
 

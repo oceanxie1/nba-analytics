@@ -220,3 +220,20 @@ class TeamComparison(BaseModel):
     class Config:
         orm_mode = True
 
+
+# Game prediction schemas
+class GamePredictionRequest(BaseModel):
+    home_team_id: int
+    away_team_id: int
+    game_date: date
+    season: str
+
+
+class GamePrediction(BaseModel):
+    prediction: int  # 1 = home wins, 0 = away wins
+    predicted_winner: str  # "home" or "away"
+    probability: float  # Confidence score (0-1)
+    home_win_prob: float
+    away_win_prob: float
+    model_available: bool = True
+

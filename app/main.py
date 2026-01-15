@@ -1,8 +1,11 @@
 """FastAPI application entry point."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 import logging
+import traceback
 
 from app.db import init_db
 from app.routers import players, teams, games
@@ -24,6 +27,33 @@ app = FastAPI(
         "persistAuthorization": True,
     },
 )
+
+
+# Global exception handler (catches all exceptions except HTTPException)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Handle all unhandled exceptions and return JSON response."""
+    # Don't handle HTTPException here - let FastAPI handle it
+    if isinstance(exc, HTTPException):
+        raise exc
+    
+    error_trace = traceback.format_exc()
+    logger.error(f"Unhandled exception: {str(exc)}\n{error_trace}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": f"Internal server error: {str(exc)}"}
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors and return JSON response."""
+    logger.error(f"Validation error: {exc.errors()}")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()}
+    )
+
 
 # CORS for frontend framework (e.g., React/Vite on localhost:5173)
 origins = [
